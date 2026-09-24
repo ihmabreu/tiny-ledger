@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 
 /**
  * Request body for recording a money movement.
@@ -15,10 +16,18 @@ import java.math.BigDecimal;
  * <p>The amount is always supplied as a positive number; the direction comes from
  * {@code type}. That avoids ambiguity about what a negative withdrawal would mean.</p>
  *
- * @param type      whether money moves in ({@code DEPOSIT}) or out ({@code WITHDRAWAL})
- * @param amount    the strictly positive amount to move
- * @param currency  ISO 4217 code, which must match the account currency
- * @param reference optional free-text note describing the movement
+ * <p>{@code occurredAt} is the caller's own record of when the movement happened. It is
+ * required: a caller always knows when they acted, and making it optional would mean every
+ * consumer of the history has to handle a missing value forever. It is stored as reference
+ * data only &mdash; the ledger times and orders the movement by its own clock regardless. See
+ * {@link com.teya.tinyledger.domain.Transaction} for the reasoning and the accepted drift
+ * window.</p>
+ *
+ * @param type       whether money moves in ({@code DEPOSIT}) or out ({@code WITHDRAWAL})
+ * @param amount     the strictly positive amount to move
+ * @param currency   ISO 4217 code, which must match the account currency
+ * @param reference  optional free-text note describing the movement
+ * @param occurredAt when the caller says the movement happened, as an ISO-8601 instant
  */
 public record RecordTransactionRequest(
         @NotNull(message = "type must be either DEPOSIT or WITHDRAWAL")
@@ -34,5 +43,8 @@ public record RecordTransactionRequest(
         String currency,
 
         @Size(max = 140, message = "reference must be at most 140 characters")
-        String reference) {
+        String reference,
+
+        @NotNull(message = "occurredAt must be provided as an ISO-8601 instant, for example 2026-01-01T09:00:00Z")
+        Instant occurredAt) {
 }

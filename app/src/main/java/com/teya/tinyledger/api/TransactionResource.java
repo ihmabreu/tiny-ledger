@@ -62,6 +62,11 @@ public class TransactionResource {
     /**
      * Records a deposit or a withdrawal.
      *
+     * <p>The caller's {@code occurredAt} is carried through to the stored movement as reference
+     * data. It never affects where the movement lands in the history, what the balance becomes,
+     * or whether an overdraft check passes &mdash; those follow the ledger's own clock and the
+     * account-scoped sequence. See {@link com.teya.tinyledger.domain.Transaction}.</p>
+     *
      * @param accountId the account to move money on
      * @param request   the movement to record
      * @param uriInfo   used to build the {@code Location} header
@@ -73,8 +78,8 @@ public class TransactionResource {
                                       @Context UriInfo uriInfo) {
         Money amount = requestMapper.toAmount(request);
 
-        Transaction transaction =
-                ledgerService.recordMovement(accountId, request.type(), amount, request.reference());
+        Transaction transaction = ledgerService.recordMovement(
+                accountId, request.type(), amount, request.reference(), request.occurredAt());
 
         return Response
                 .created(uriInfo.getAbsolutePath())

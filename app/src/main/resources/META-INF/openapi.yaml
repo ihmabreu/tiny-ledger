@@ -139,6 +139,11 @@ paths:
         Records a deposit or a withdrawal against the account. The amount must be strictly
         positive and its currency must match the account currency. Withdrawals are rejected
         with `422` when they would push the account balance below zero.
+
+        The required `occurredAt` field carries the caller's own event time. It is stored and
+        echoed back, but never used for the balance, the overdraft decision or the ordering of
+        the history — those follow the ledger's own `recordedAt` clock. A value outside the
+        accepted drift window is rejected with `400`.
       requestBody:
         required: true
         content:
@@ -355,6 +360,7 @@ components:
         - type
         - amount
         - currency
+        - occurredAt
       properties:
         type:
           $ref: '#/components/schemas/TransactionType'
@@ -370,6 +376,24 @@ components:
           description: Optional free-text note describing the movement.
           maxLength: 140
           example: Salary payment
+        occurredAt:
+          type: string
+          format: date-time
+          description: |
+            When the caller's own system considers the movement to have happened, as an
+            ISO-8601 instant.
+
+            This is reference data only. The ledger times and orders every movement by its own
+            clock (`recordedAt`), so a client clock can never influence the balance, the
+            overdraft decision, or the order of the history.
+
+            It is validated for plausibility rather than trusted: it must fall no more than
+            **24 hours before** and no more than **5 minutes after** the moment the ledger
+            books the movement, otherwise the request is rejected with `400`. The window is
+            asymmetric because arriving late is ordinary — a queued retry, an offline terminal
+            reconnecting — whereas a movement claiming to have happened in the future is never
+            legitimate.
+          example: '2026-01-01T09:00:00Z'
 
     Transaction:
       type: object
@@ -380,6 +404,7 @@ components:
         - amount
         - currency
         - availableBalanceAfter
+        - occurredAt
         - recordedAt
       properties:
         id:
@@ -404,9 +429,19 @@ components:
           type: string
           nullable: true
           description: Optional free-text note supplied when the movement was recorded.
+        occurredAt:
+          type: string
+          format: date-time
+          description: |
+            Event time: when the caller said the movement happened. Reference data only, echoed
+            back exactly as supplied.
         recordedAt:
           type: string
           format: date-time
+          description: |
+            Booking time: when the ledger applied the movement, from its own clock. This is the
+            authoritative timestamp. Together with the account-scoped ordering it determines the
+            running balance and the order of the history.
 
     TransactionHistory:
       type: object

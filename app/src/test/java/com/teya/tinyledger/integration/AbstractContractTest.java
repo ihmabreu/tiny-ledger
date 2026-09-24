@@ -4,6 +4,8 @@ import com.teya.tinyledger.support.OpenApiContract;
 import io.restassured.http.ContentType;
 import io.restassured.specification.RequestSpecification;
 
+import java.time.Instant;
+
 import static io.restassured.RestAssured.given;
 
 /**
@@ -70,7 +72,7 @@ abstract class AbstractContractTest {
     }
 
     /**
-     * Records a movement through the API.
+     * Records a movement through the API, timed as having happened now.
      *
      * @param accountId the account to move money on
      * @param type      {@code DEPOSIT} or {@code WITHDRAWAL}
@@ -81,14 +83,51 @@ abstract class AbstractContractTest {
      */
     protected static io.restassured.response.Response record(
             String accountId, String type, String amount, String currency, String reference) {
+        return record(accountId, type, amount, currency, reference, Instant.now());
+    }
+
+    /**
+     * Records a movement through the API with an explicit client event time.
+     *
+     * @param accountId  the account to move money on
+     * @param type       {@code DEPOSIT} or {@code WITHDRAWAL}
+     * @param amount     the amount, as a decimal string
+     * @param currency   ISO 4217 code
+     * @param reference  an optional note, may be {@code null}
+     * @param occurredAt the client's event time
+     * @return the raw response for further assertions
+     */
+    protected static io.restassured.response.Response record(
+            String accountId, String type, String amount, String currency, String reference, Instant occurredAt) {
         String body = reference == null
                 ? """
-                {"type":"%s","amount":"%s","currency":"%s"}
-                """.formatted(type, amount, currency)
+                {"type":"%s","amount":"%s","currency":"%s","occurredAt":"%s"}
+                """.formatted(type, amount, currency, occurredAt)
                 : """
-                {"type":"%s","amount":"%s","currency":"%s","reference":"%s"}
-                """.formatted(type, amount, currency, reference);
+                {"type":"%s","amount":"%s","currency":"%s","reference":"%s","occurredAt":"%s"}
+                """.formatted(type, amount, currency, reference, occurredAt);
 
         return api().body(body).when().post("/api/v1/accounts/{accountId}/transactions", accountId);
+    }
+
+    /**
+     * Records a movement without supplying {@code occurredAt}, bypassing contract validation.
+     *
+     * <p>The contract marks the field required, so the validating filter would block the
+     * request before it reached the server; this proves the server enforces it too.</p>
+     *
+     * @param accountId the account to move money on
+     * @param type      {@code DEPOSIT} or {@code WITHDRAWAL}
+     * @param amount    the amount, as a decimal string
+     * @param currency  ISO 4217 code
+     * @return the raw response for further assertions
+     */
+    protected static io.restassured.response.Response recordWithoutOccurredAt(
+            String accountId, String type, String amount, String currency) {
+        return rawApi()
+                .body("""
+                        {"type":"%s","amount":"%s","currency":"%s"}
+                        """.formatted(type, amount, currency))
+                .when().post("/api/v1/accounts/{accountId}/transactions", accountId);
     }
 }

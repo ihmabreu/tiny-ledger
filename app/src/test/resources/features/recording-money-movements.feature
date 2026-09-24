@@ -50,3 +50,26 @@ Feature: Recording money movements
       | amount |
       | 0.00   |
       | -5.00  |
+
+  Scenario: A movement captured earlier is accepted and keeps its own event time
+    When I deposit 250.00 EUR into "Ada" with the reference "Salary", claiming it happened 6 hours ago
+    Then the deposit is accepted
+    And the available balance of "Ada" is 250.00 EUR
+
+  Scenario: A client's clock cannot reorder the statement
+    When I deposit 10.00 EUR into "Ada" with the reference "First", claiming it happened 1 hours ago
+    And I deposit 20.00 EUR into "Ada" with the reference "Second", claiming it happened 10 hours ago
+    And I deposit 30.00 EUR into "Ada" with the reference "Third", claiming it happened 20 hours ago
+    And I view the transaction history of "Ada"
+    Then the references in the history are Third, Second, First
+    And the available balance of "Ada" is 60.00 EUR
+
+  Scenario: A movement dated implausibly far in the past is refused
+    When I deposit 50.00 EUR into "Ada", claiming it happened 3 days ago
+    Then the movement is rejected as invalid
+    And the transaction history of "Ada" is empty
+
+  Scenario: A movement dated in the future is refused
+    When I deposit 50.00 EUR into "Ada", claiming it will happen in 2 hours
+    Then the movement is rejected as invalid
+    And the transaction history of "Ada" is empty

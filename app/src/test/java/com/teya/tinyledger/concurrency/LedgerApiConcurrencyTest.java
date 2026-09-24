@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -50,16 +51,16 @@ class LedgerApiConcurrencyTest {
     private static Response deposit(String accountId, String amount) {
         return given().contentType(ContentType.JSON).accept(ContentType.JSON)
                 .body("""
-                        {"type":"DEPOSIT","amount":"%s","currency":"EUR"}
-                        """.formatted(amount))
+                        {"type":"DEPOSIT","amount":"%s","currency":"EUR","occurredAt":"%s"}
+                        """.formatted(amount, Instant.now()))
                 .when().post("/api/v1/accounts/{id}/transactions", accountId);
     }
 
     private static Response withdraw(String accountId, String amount) {
         return given().contentType(ContentType.JSON).accept(ContentType.JSON)
                 .body("""
-                        {"type":"WITHDRAWAL","amount":"%s","currency":"EUR"}
-                        """.formatted(amount))
+                        {"type":"WITHDRAWAL","amount":"%s","currency":"EUR","occurredAt":"%s"}
+                        """.formatted(amount, Instant.now()))
                 .when().post("/api/v1/accounts/{id}/transactions", accountId);
     }
 

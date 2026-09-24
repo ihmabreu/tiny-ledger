@@ -12,6 +12,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
 import java.util.Objects;
@@ -78,6 +79,15 @@ public class DefaultLedgerService implements LedgerService {
     @Override
     public Transaction recordMovement(UUID accountId, TransactionType type, Money amount, String reference) {
         return getAccount(accountId).recordMovement(type, amount, reference);
+    }
+
+    @Override
+    public Transaction recordMovement(UUID accountId,
+                                      TransactionType type,
+                                      Money amount,
+                                      String reference,
+                                      Instant occurredAt) {
+        return getAccount(accountId).recordMovement(type, amount, reference, occurredAt);
     }
 
     @Override

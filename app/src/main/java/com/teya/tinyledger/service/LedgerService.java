@@ -10,6 +10,7 @@ import com.teya.tinyledger.domain.exception.AccountNotFoundException;
 import com.teya.tinyledger.domain.exception.CurrencyMismatchException;
 import com.teya.tinyledger.domain.exception.InsufficientFundsException;
 
+import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
 import java.util.UUID;
@@ -87,7 +88,10 @@ public interface LedgerService {
     Transaction withdraw(UUID accountId, Money amount, String reference);
 
     /**
-     * Records a money movement of the given direction.
+     * Records a money movement of the given direction, timed as having happened now.
+     *
+     * <p>Convenience for internal callers with no separate client event time; the event time is
+     * taken from the ledger's own clock.</p>
      *
      * @param accountId the account to move money on
      * @param type      whether money moves in or out
@@ -100,6 +104,32 @@ public interface LedgerService {
      * @throws InsufficientFundsException if the movement would breach the overdraft allowance
      */
     Transaction recordMovement(UUID accountId, TransactionType type, Money amount, String reference);
+
+    /**
+     * Records a money movement of the given direction, carrying the client's own event time.
+     *
+     * <p>{@code occurredAt} is stored as reference data and never influences the balance, the
+     * overdraft decision or the order of the history &mdash; see {@link Transaction} for why.
+     * It must fall within the drift window documented there.</p>
+     *
+     * @param accountId  the account to move money on
+     * @param type       whether money moves in or out
+     * @param amount     the strictly positive amount, in the account currency
+     * @param reference  an optional free-text note, may be {@code null}
+     * @param occurredAt when the client says the movement happened
+     * @return the recorded transaction
+     * @throws AccountNotFoundException   if no such account exists
+     * @throws CurrencyMismatchException  if the amount is in another currency
+     * @throws IllegalArgumentException   if the amount is not strictly positive, or
+     *                                    {@code occurredAt} lies outside the drift window
+     * @throws NullPointerException       if {@code occurredAt} is {@code null}
+     * @throws InsufficientFundsException if the movement would breach the overdraft allowance
+     */
+    Transaction recordMovement(UUID accountId,
+                               TransactionType type,
+                               Money amount,
+                               String reference,
+                               Instant occurredAt);
 
     /**
      * Reads an account's current balance.

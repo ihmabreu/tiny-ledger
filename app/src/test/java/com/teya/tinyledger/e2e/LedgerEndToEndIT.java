@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.time.Instant;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsString;
@@ -77,16 +79,16 @@ class LedgerEndToEndIT {
 
         given().contentType(ContentType.JSON).accept(ContentType.JSON)
                 .body("""
-                        {"type":"DEPOSIT","amount":"1000.00","currency":"EUR","reference":"Salary"}
-                        """)
+                        {"type":"DEPOSIT","amount":"1000.00","currency":"EUR","reference":"Salary","occurredAt":"%s"}
+                        """.formatted(Instant.now()))
                 .when().post("/api/v1/accounts/{id}/transactions", accountId)
                 .then().statusCode(201)
                 .body("availableBalanceAfter", equalTo("1000.00"));
 
         given().contentType(ContentType.JSON).accept(ContentType.JSON)
                 .body("""
-                        {"type":"WITHDRAWAL","amount":"1150.00","currency":"EUR","reference":"Car repair"}
-                        """)
+                        {"type":"WITHDRAWAL","amount":"1150.00","currency":"EUR","reference":"Car repair","occurredAt":"%s"}
+                        """.formatted(Instant.now()))
                 .when().post("/api/v1/accounts/{id}/transactions", accountId)
                 .then().statusCode(201)
                 .body("availableBalanceAfter", equalTo("-150.00"));
@@ -124,8 +126,8 @@ class LedgerEndToEndIT {
 
         given().contentType(ContentType.JSON).accept(ContentType.JSON)
                 .body("""
-                        {"type":"WITHDRAWAL","amount":"10.01","currency":"EUR"}
-                        """)
+                        {"type":"WITHDRAWAL","amount":"10.01","currency":"EUR","occurredAt":"%s"}
+                        """.formatted(Instant.now()))
                 .when().post("/api/v1/accounts/{id}/transactions", accountId)
                 .then()
                 .statusCode(422)

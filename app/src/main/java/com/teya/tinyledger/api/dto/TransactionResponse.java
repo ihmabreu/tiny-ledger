@@ -17,7 +17,8 @@ import java.util.UUID;
  * @param currency              ISO 4217 code of the account currency
  * @param availableBalanceAfter the available balance immediately after the movement
  * @param reference             optional free-text note, {@code null} when none was supplied
- * @param recordedAt            when the movement was recorded
+ * @param occurredAt            when the caller said the movement happened; reference data only
+ * @param recordedAt            when the ledger applied the movement; the authoritative time
  */
 public record TransactionResponse(
         UUID id,
@@ -27,5 +28,6 @@ public record TransactionResponse(
         String currency,
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal availableBalanceAfter,
         String reference,
+        Instant occurredAt,
         Instant recordedAt) {
 }

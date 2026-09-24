@@ -23,6 +23,11 @@ load-tests/build/reports/gatling/
 *.tar.gz
 !gradle/wrapper/gradle-wrapper.jar
 
+# --- Assessment source material --------------------------------------------
+# The briefs this solution was written against. They are someone else's
+# documents, not part of the deliverable, and are kept out of the repository.
+*.pdf
+
 # --- IDEs ------------------------------------------------------------------
 .idea/
 *.iml

@@ -4,6 +4,8 @@ import io.gatling.javaapi.core.ChainBuilder;
 import io.gatling.javaapi.core.ScenarioBuilder;
 import io.gatling.javaapi.http.HttpProtocolBuilder;
 
+import java.time.Instant;
+
 import static io.gatling.javaapi.core.CoreDsl.StringBody;
 import static io.gatling.javaapi.core.CoreDsl.exec;
 import static io.gatling.javaapi.core.CoreDsl.jsonPath;
@@ -58,14 +60,19 @@ final class LedgerLoadSupport {
     /**
      * Pays a small amount into the account held in the session.
      *
+     * <p>{@code occurredAt} is built per request rather than baked into a constant body, so the
+     * simulation sends the same shape of payload a real client would. A value captured once at
+     * build time would still pass validation, which is exactly why it would be a misleading
+     * thing to write.</p>
+     *
      * @return the request chain
      */
     static ChainBuilder deposit() {
         return exec(http("Record deposit")
                 .post("/api/v1/accounts/#{accountId}/transactions")
-                .body(StringBody("""
-                        {"type":"DEPOSIT","amount":"10.00","currency":"EUR","reference":"Load test deposit"}
-                        """))
+                .body(StringBody(session -> """
+                        {"type":"DEPOSIT","amount":"10.00","currency":"EUR","reference":"Load test deposit","occurredAt":"%s"}
+                        """.formatted(Instant.now())))
                 .check(status().is(201)));
     }
 
@@ -77,9 +84,9 @@ final class LedgerLoadSupport {
     static ChainBuilder withdraw() {
         return exec(http("Record withdrawal")
                 .post("/api/v1/accounts/#{accountId}/transactions")
-                .body(StringBody("""
-                        {"type":"WITHDRAWAL","amount":"5.00","currency":"EUR","reference":"Load test withdrawal"}
-                        """))
+                .body(StringBody(session -> """
+                        {"type":"WITHDRAWAL","amount":"5.00","currency":"EUR","reference":"Load test withdrawal","occurredAt":"%s"}
+                        """.formatted(Instant.now())))
                 .check(status().is(201)));
     }
 

@@ -33,6 +33,7 @@ class BalanceSnapshotTest {
     private static final Instant OPENED_AT = Instant.parse("2026-01-01T09:00:00Z");
 
     private static Transaction transaction(long sequence, TransactionType type, String amount, String balanceAfter) {
+        Instant at = OPENED_AT.plusSeconds(sequence);
         return new Transaction(
                 UUID.randomUUID(),
                 ACCOUNT_ID,
@@ -41,7 +42,8 @@ class BalanceSnapshotTest {
                 Money.of(amount, EUR),
                 Money.of(balanceAfter, EUR),
                 null,
-                OPENED_AT.plusSeconds(sequence));
+                at,
+                at);
     }
 
     @Test

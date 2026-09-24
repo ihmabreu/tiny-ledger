@@ -82,6 +82,7 @@ public class LedgerResponseMapper {
                 transaction.amount().currency().getCurrencyCode(),
                 transaction.availableBalanceAfter().amount(),
                 transaction.reference(),
+                transaction.occurredAt(),
                 transaction.recordedAt());
     }
 

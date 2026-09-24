@@ -6,6 +6,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -206,5 +210,92 @@ class TransactionApiTest extends AbstractContractTest {
                 .statusCode(400)
                 .body("code", equalTo("VALIDATION_FAILED"))
                 .body("message", containsString("limit"));
+    }
+
+    @Test
+    @DisplayName("the client's event time is echoed back alongside the ledger's own")
+    void recordTransaction_withOccurredAt_echoesItBackSeparatelyFromRecordedAt() {
+        String accountId = openAccount("Event Time Owner", "EUR", "0.00");
+        Instant clientTime = Instant.now().minus(Duration.ofHours(2)).truncatedTo(ChronoUnit.SECONDS);
+
+        record(accountId, "DEPOSIT", "100.00", "EUR", "Backdated salary", clientTime)
+                .then()
+                .statusCode(201)
+                .body("occurredAt", equalTo(clientTime.toString()))
+                .body("recordedAt", Matchers.not(equalTo(clientTime.toString())));
+    }
+
+    @Test
+    @DisplayName("a movement without an event time is refused with 400")
+    void recordTransaction_missingOccurredAt_returnsBadRequest() {
+        String accountId = openAccount("Missing Time Owner", "EUR", "0.00");
+
+        recordWithoutOccurredAt(accountId, "DEPOSIT", "100.00", "EUR")
+                .then()
+                .statusCode(400)
+                .body("code", equalTo("VALIDATION_FAILED"));
+    }
+
+    @Test
+    @DisplayName("an event time older than the accepted window is refused with 400")
+    void recordTransaction_occurredAtBeyondPastDriftWindow_returnsBadRequest() {
+        String accountId = openAccount("Stale Clock Owner", "EUR", "0.00");
+        Instant tooOld = Instant.now().minus(Duration.ofDays(3));
+
+        record(accountId, "DEPOSIT", "100.00", "EUR", null, tooOld)
+                .then()
+                .statusCode(400)
+                .body("code", equalTo("VALIDATION_FAILED"))
+                .body("message", containsString("occurredAt"));
+    }
+
+    @Test
+    @DisplayName("an event time in the future is refused with 400")
+    void recordTransaction_occurredAtBeyondFutureDriftWindow_returnsBadRequest() {
+        String accountId = openAccount("Fast Clock Owner", "EUR", "0.00");
+        Instant future = Instant.now().plus(Duration.ofHours(1));
+
+        record(accountId, "DEPOSIT", "100.00", "EUR", null, future)
+                .then()
+                .statusCode(400)
+                .body("code", equalTo("VALIDATION_FAILED"))
+                .body("message", containsString("occurredAt"));
+    }
+
+    @Test
+    @DisplayName("a rejected event time leaves the balance and history untouched")
+    void recordTransaction_rejectedForDrift_doesNotRecordAnything() {
+        String accountId = openAccount("Untouched Owner", "EUR", "0.00");
+        record(accountId, "DEPOSIT", "100.00", "EUR", null).then().statusCode(201);
+
+        record(accountId, "DEPOSIT", "50.00", "EUR", null, Instant.now().minus(Duration.ofDays(3)))
+                .then().statusCode(400);
+
+        rawApi().when().get("/api/v1/accounts/{accountId}/balance", accountId)
+                .then()
+                .statusCode(200)
+                .body("availableBalance", equalTo("100.00"))
+                .body("transactionCount", equalTo(1));
+    }
+
+    @Test
+    @DisplayName("history stays ordered by when the ledger recorded movements, not by the client's clock")
+    void getHistory_outOfOrderOccurredAt_ordersByRecordingOrderNotEventTime() {
+        String accountId = openAccount("Ordering Owner", "EUR", "0.00");
+        Instant now = Instant.now();
+
+        // Client times run backwards while the recording order runs forwards.
+        record(accountId, "DEPOSIT", "10.00", "EUR", "first", now.minus(Duration.ofHours(1)))
+                .then().statusCode(201);
+        record(accountId, "DEPOSIT", "20.00", "EUR", "second", now.minus(Duration.ofHours(10)))
+                .then().statusCode(201);
+        record(accountId, "DEPOSIT", "30.00", "EUR", "third", now.minus(Duration.ofHours(20)))
+                .then().statusCode(201);
+
+        api().when().get("/api/v1/accounts/{accountId}/transactions", accountId)
+                .then()
+                .statusCode(200)
+                .body("transactions.reference", contains("third", "second", "first"))
+                .body("transactions.availableBalanceAfter", contains("60.00", "30.00", "10.00"));
     }
 }

@@ -124,10 +124,11 @@ public final class Account {
     }
 
     /**
-     * Records a money movement against this account.
+     * Records a money movement against this account, timing it as having happened now.
      *
-     * <p>Validation that needs no shared state is performed before the lock is taken, keeping
-     * the critical section as short as possible.</p>
+     * <p>Convenience for callers that have no separate client-supplied event time &mdash; the
+     * seed data and the parts of the test suite that are not about timing. The event time is
+     * taken from the ledger's own clock, so it coincides with the booking time.</p>
      *
      * @param type      whether money moves in or out
      * @param amount    the strictly positive amount to move, in the account currency
@@ -138,8 +139,36 @@ public final class Account {
      * @throws InsufficientFundsException   if the movement would breach the overdraft allowance
      */
     public Transaction recordMovement(TransactionType type, Money amount, String reference) {
+        return recordMovement(type, amount, reference, clock.instant());
+    }
+
+    /**
+     * Records a money movement against this account.
+     *
+     * <p>Validation that needs no shared state is performed before the lock is taken, keeping
+     * the critical section as short as possible.</p>
+     *
+     * <p>{@code occurredAt} is recorded verbatim and otherwise ignored: the movement's position
+     * in the history, the running balance and the overdraft decision are all driven by the
+     * booking time and the account-scoped sequence, never by the client's clock. Its only
+     * constraint is that it must fall within the drift window documented on
+     * {@link Transaction}, which is checked when the transaction is constructed.</p>
+     *
+     * @param type       whether money moves in or out
+     * @param amount     the strictly positive amount to move, in the account currency
+     * @param reference  an optional free-text note, may be {@code null} or blank
+     * @param occurredAt when the client says the movement happened; reference data only
+     * @return the recorded, immutable transaction
+     * @throws IllegalArgumentException     if the amount is not strictly positive, or
+     *                                      {@code occurredAt} lies outside the drift window
+     * @throws NullPointerException         if {@code occurredAt} is {@code null}
+     * @throws CurrencyMismatchException    if the amount is in another currency
+     * @throws InsufficientFundsException   if the movement would breach the overdraft allowance
+     */
+    public Transaction recordMovement(TransactionType type, Money amount, String reference, Instant occurredAt) {
         Objects.requireNonNull(type, "type must not be null");
         Objects.requireNonNull(amount, "amount must not be null");
+        Objects.requireNonNull(occurredAt, "occurredAt must not be null");
 
         if (!amount.currency().equals(currency)) {
             throw new CurrencyMismatchException(currency, amount.currency());
@@ -174,6 +203,7 @@ public final class Account {
                     amount,
                     resultingBalance,
                     normalisedReference,
+                    occurredAt,
                     clock.instant());
 
             transactions.add(transaction);

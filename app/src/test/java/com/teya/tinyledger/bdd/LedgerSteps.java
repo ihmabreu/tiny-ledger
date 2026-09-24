@@ -10,6 +10,8 @@ import io.restassured.response.Response;
 import io.restassured.specification.RequestSpecification;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -142,6 +144,50 @@ public class LedgerSteps {
     @When("^I withdraw (-?[\\d.]+) ([A-Z]{3}) from \"([^\"]*)\"$")
     public void iWithdraw(String amount, String currency, String owner) {
         lastResponse = move(owner, "WITHDRAWAL", amount, currency, null);
+    }
+
+    /**
+     * Pays money in, claiming it happened some hours ago at the caller's end.
+     *
+     * @param amount    the amount
+     * @param currency  ISO 4217 code
+     * @param owner     the account holder
+     * @param reference the free-text note
+     * @param hoursAgo  how long ago the caller says the movement happened
+     */
+    @When("^I deposit (-?[\\d.]+) ([A-Z]{3}) into \"([^\"]*)\" with the reference \"([^\"]*)\", claiming it happened (\\d+) hours ago$")
+    public void iDepositClaimingItHappenedHoursAgo(String amount, String currency, String owner,
+                                                   String reference, int hoursAgo) {
+        lastResponse = move(owner, "DEPOSIT", amount, currency, reference,
+                Instant.now().minus(Duration.ofHours(hoursAgo)));
+    }
+
+    /**
+     * Pays money in, claiming it happened implausibly long ago.
+     *
+     * @param amount   the amount
+     * @param currency ISO 4217 code
+     * @param owner    the account holder
+     * @param daysAgo  how long ago the caller says the movement happened
+     */
+    @When("^I deposit (-?[\\d.]+) ([A-Z]{3}) into \"([^\"]*)\", claiming it happened (\\d+) days ago$")
+    public void iDepositClaimingItHappenedDaysAgo(String amount, String currency, String owner, int daysAgo) {
+        lastResponse = move(owner, "DEPOSIT", amount, currency, null,
+                Instant.now().minus(Duration.ofDays(daysAgo)));
+    }
+
+    /**
+     * Pays money in, claiming it will happen in the future.
+     *
+     * @param amount     the amount
+     * @param currency   ISO 4217 code
+     * @param owner      the account holder
+     * @param hoursAhead how far ahead the caller places the movement
+     */
+    @When("^I deposit (-?[\\d.]+) ([A-Z]{3}) into \"([^\"]*)\", claiming it will happen in (\\d+) hours$")
+    public void iDepositClaimingItHappensInTheFuture(String amount, String currency, String owner, int hoursAhead) {
+        lastResponse = move(owner, "DEPOSIT", amount, currency, null,
+                Instant.now().plus(Duration.ofHours(hoursAhead)));
     }
 
     /**
@@ -353,13 +399,18 @@ public class LedgerSteps {
     }
 
     private Response move(String owner, String type, String amount, String currency, String reference) {
+        return move(owner, type, amount, currency, reference, Instant.now());
+    }
+
+    private Response move(String owner, String type, String amount, String currency, String reference,
+                          Instant occurredAt) {
         String body = reference == null
                 ? """
-                {"type":"%s","amount":"%s","currency":"%s"}
-                """.formatted(type, amount, currency)
+                {"type":"%s","amount":"%s","currency":"%s","occurredAt":"%s"}
+                """.formatted(type, amount, currency, occurredAt)
                 : """
-                {"type":"%s","amount":"%s","currency":"%s","reference":"%s"}
-                """.formatted(type, amount, currency, reference);
+                {"type":"%s","amount":"%s","currency":"%s","reference":"%s","occurredAt":"%s"}
+                """.formatted(type, amount, currency, reference, occurredAt);
 
         return api().body(body).when().post("/api/v1/accounts/{id}/transactions", accountId(owner));
     }

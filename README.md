@@ -90,13 +90,20 @@ Keep the `id` for the calls below:
 ACCOUNT=8a39b1ce-3d4b-4802-a3bc-3b9ca5d59c50
 ```
 
-Record a deposit. The `currency` is mandatory: stating it explicitly lets the ledger reject a
-movement aimed at the wrong account rather than silently assuming the caller meant EUR.
+Record a deposit. Two fields deserve a note:
+
+- `currency` is mandatory — stating it explicitly lets the ledger reject a movement aimed at
+  the wrong account rather than silently assuming the caller meant EUR.
+- `occurredAt` is mandatory — it is *your* record of when the movement happened. The ledger
+  stores it and hands it back, but never uses it for the balance or the order of the
+  statement; those follow the ledger's own `recordedAt` clock. See
+  [Two timestamps](#two-timestamps).
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   -H 'Content-Type: application/json' \
-  -d '{"type": "DEPOSIT", "amount": "1000.00", "currency": "EUR", "reference": "Salary"}'
+  -d "{\"type\": \"DEPOSIT\", \"amount\": \"1000.00\", \"currency\": \"EUR\",
+       \"reference\": \"Salary\", \"occurredAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
 
 ```json
@@ -108,6 +115,7 @@ curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   "currency": "EUR",
   "availableBalanceAfter": "1000.00",
   "reference": "Salary",
+  "occurredAt": "2026-09-22T16:26:09Z",
   "recordedAt": "2026-09-22T16:26:10.533677Z"
 }
 ```
@@ -117,7 +125,8 @@ Record a withdrawal:
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   -H 'Content-Type: application/json' \
-  -d '{"type": "WITHDRAWAL", "amount": "120.50", "currency": "EUR", "reference": "Groceries"}'
+  -d "{\"type\": \"WITHDRAWAL\", \"amount\": \"120.50\", \"currency\": \"EUR\",
+       \"reference\": \"Groceries\", \"occurredAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
 
 Read the balance. Two figures are reported, and they mean different things — see
@@ -151,10 +160,12 @@ curl -s "http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions?limit=10&of
   "transactions": [
     { "id": "ff10c65d-...", "accountId": "8a39b1ce-...", "type": "WITHDRAWAL",
       "amount": "120.50", "currency": "EUR", "availableBalanceAfter": "879.50",
-      "reference": "Groceries", "recordedAt": "2026-09-22T16:26:10.572695Z" },
+      "reference": "Groceries", "occurredAt": "2026-09-22T16:26:10Z",
+      "recordedAt": "2026-09-22T16:26:10.572695Z" },
     { "id": "6153a940-...", "accountId": "8a39b1ce-...", "type": "DEPOSIT",
       "amount": "1000.00", "currency": "EUR", "availableBalanceAfter": "1000.00",
-      "reference": "Salary", "recordedAt": "2026-09-22T16:26:10.533677Z" }
+      "reference": "Salary", "occurredAt": "2026-09-22T16:26:09Z",
+      "recordedAt": "2026-09-22T16:26:10.533677Z" }
   ],
   "limit": 10,
   "offset": 0,
@@ -171,7 +182,8 @@ Try to spend past the overdraft allowance and the request is refused:
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   -H 'Content-Type: application/json' \
-  -d '{"type": "WITHDRAWAL", "amount": "99999.00", "currency": "EUR"}'
+  -d "{\"type\": \"WITHDRAWAL\", \"amount\": \"99999.00\", \"currency\": \"EUR\",
+       \"occurredAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
 
 ```json
@@ -190,7 +202,7 @@ Send a movement in the wrong currency and it is refused too, with `CURRENCY_MISM
 |--------|-------------------------------------------------------------------------------|
 | `200`  | Read succeeded                                                                |
 | `201`  | Account opened, or transaction recorded                                       |
-| `400`  | The request is malformed — bad currency code, non-positive amount, bad `limit` |
+| `400`  | The request is malformed — bad currency code, non-positive amount, bad `limit`, missing or implausible `occurredAt` |
 | `404`  | No such account                                                               |
 | `422`  | The request is well-formed but a business rule rejected it — insufficient funds, currency mismatch |
 | `500`  | Unexpected failure                                                            |
@@ -233,6 +245,58 @@ must not go negative.
 There is deliberately no "opening balance" field on account creation. Money enters an account
 the same way it always does — as a `DEPOSIT` that appears in the history like any other — so
 the invariant holds from the very first second of the account's life.
+
+## Two timestamps
+
+Every movement carries two times, and only one of them is trusted:
+
+| | `recordedAt` | `occurredAt` |
+|---|---|---|
+| Set by | the ledger | you, the caller |
+| Means | when the movement was booked | when you say it happened |
+| Drives the balance and the order of the statement | **yes** | **never** |
+
+`occurredAt` is required on every `POST /transactions`. The ledger stores it, returns it
+unchanged, and otherwise ignores it — the running balance, the overdraft decision and the
+order of the history all follow `recordedAt` and an internal per-account sequence.
+
+That is not an oversight, it is the point. A client clock cannot be relied on: it drifts, it
+gets time zones wrong, and over an API it can simply be *asserted* — nothing stops a caller
+sending whatever instant suits them. If client time drove the history, a caller could slot a
+movement into the middle of their own statement and change every running balance after it. A
+ledger that can be rewritten after the fact is not a ledger.
+
+It is still worth recording, because it answers something booking time cannot: *when did this
+happen to the customer?* A terminal that was offline for an hour, an app retrying from a
+tunnel, an overnight batch — in each case the booking time is when the ledger heard about the
+movement, not when it happened.
+
+It is sanity-checked rather than trusted. A value more than **24 hours before** or **5 minutes
+after** the booking time is refused with `400`:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
+  -H 'Content-Type: application/json' \
+  -d '{"type": "DEPOSIT", "amount": "10.00", "currency": "EUR",
+       "occurredAt": "2019-01-01T00:00:00Z"}'
+```
+
+```json
+{
+  "code": "VALIDATION_FAILED",
+  "message": "occurredAt 2019-01-01T00:00:00Z is more than 24h before the ledger's own clock (2026-09-24T18:31:02.184Z). A movement this old cannot be accepted; check the client's clock.",
+  "timestamp": "2026-09-24T18:31:02.186Z"
+}
+```
+
+The window is asymmetric on purpose. Arriving late is ordinary — a queued retry, a reconnecting
+terminal — whereas a movement claiming to have happened in the future is never legitimate, so
+the only tolerance needed ahead of the clock is for ordinary client/server skew. A rejected
+movement changes nothing: the check runs before anything is appended, so the balance and
+history are left exactly as they were.
+
+Full reasoning, including why the field is required rather than optional, is in
+[ASSUMPTIONS.md](docs/ASSUMPTIONS.md#time).
 
 ## Money is a string on the wire
 

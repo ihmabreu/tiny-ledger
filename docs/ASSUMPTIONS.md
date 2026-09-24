@@ -74,6 +74,54 @@ carries a monotonic `sequence` number, and that is what defines order.
 **`sequence` is not exposed in the API.** It is an internal ordering and audit device. Putting
 it in the contract would freeze an implementation detail into a public promise.
 
+**A movement carries two timestamps, and only one of them is trusted.**
+
+| | `recordedAt` | `occurredAt` |
+|---|---|---|
+| Set by | the ledger's own clock | the caller |
+| Means | when the movement was booked | when the caller says it happened |
+| Required | always | always — the caller must supply it |
+| Used for the balance, the overdraft check, history order | **yes** | **never** |
+
+The reasoning is that a client clock cannot be relied on for anything the ledger's correctness
+depends on. It drifts, it gets time zones and daylight saving wrong, and on an open API it can
+simply be *stated* — nothing stops a caller sending whatever instant suits them. If client time
+drove the history, a caller could insert a movement into the middle of their own statement, and
+a running balance that can be rewritten after the fact is not a ledger. So `occurredAt` is
+recorded, echoed back, and otherwise ignored.
+
+It is kept nonetheless because it answers a question booking time genuinely cannot: *when did
+this happen to the customer?* A card terminal that was offline for an hour, a mobile app
+retrying from a tunnel, a batch uploaded overnight — in all of these the booking time is the
+moment the ledger heard about the movement, which is not the moment it happened. Discarding
+that would lose real information.
+
+**`occurredAt` is required rather than optional.** A caller always knows when they acted, so
+there is no honest case for omitting it; making it optional would instead mean every consumer
+of the history has to handle a missing value for the lifetime of the API. The cost is that it
+is a required field, which is a deliberate trade.
+
+**It is sanity-checked, not trusted.** A value more than **24 hours before** or **5 minutes
+after** the booking time is rejected with `400`. This catches the case that actually occurs in
+practice — a device with a badly wrong clock, or a serialisation bug producing epoch-zero or a
+year-3000 date — without pretending the check makes the value trustworthy. The window is
+deliberately asymmetric: arriving late is ordinary (a queued retry, a reconnecting terminal),
+whereas a movement claiming to have happened in the future is never legitimate, and the only
+tolerance needed ahead of the clock is for ordinary client/server skew.
+
+Two consequences worth stating, both covered by tests:
+
+- A *rejected* movement changes nothing. The check happens before anything is appended, so a
+  bad `occurredAt` leaves the balance and history exactly as they were.
+- The bounds are enforced on `Transaction` itself, not at the HTTP edge, so no code path can
+  construct a movement that violates them — including the seeder and the tests.
+
+**24 hours is a judgement call, not a derived figure.** It is wide enough for an overnight
+batch or a terminal that was offline for a working day, and narrow enough that a clock set to
+the wrong year is caught. A system with genuinely long offline capture windows would need a
+larger value; the constants are on `Transaction` (`MAX_CLOCK_DRIFT_BEHIND`,
+`MAX_CLOCK_DRIFT_AHEAD`) precisely so that changing them is a one-line, obviously-scoped edit.
+
 ---
 
 ## API

@@ -372,4 +372,176 @@ class AccountTest {
             assertThat(account.balanceSnapshot().hasTransactions()).isTrue();
         }
     }
+
+    @Nested
+    @DisplayName("client event time")
+    class ClientEventTime {
+
+        @Test
+        @DisplayName("is stored exactly as the client supplied it")
+        void recordMovement_withClientSuppliedOccurredAt_storesItVerbatim() {
+            Account account = accountWithOverdraft("0.00");
+            Instant clientTime = OPENED_AT.minus(Duration.ofHours(3));
+
+            Transaction transaction =
+                    account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null, clientTime);
+
+            assertThat(transaction.occurredAt()).isEqualTo(clientTime);
+        }
+
+        @Test
+        @DisplayName("does not become the booking time")
+        void recordMovement_withClientSuppliedOccurredAt_stillBooksAgainstTheLedgerClock() {
+            Account account = accountWithOverdraft("0.00");
+            Instant clientTime = OPENED_AT.minus(Duration.ofHours(3));
+
+            Transaction transaction =
+                    account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null, clientTime);
+
+            assertThat(transaction.recordedAt()).isEqualTo(OPENED_AT);
+            assertThat(transaction.recordedAt()).isNotEqualTo(transaction.occurredAt());
+        }
+
+        @Test
+        @DisplayName("defaults to the ledger clock when the caller does not supply one")
+        void recordMovement_withoutOccurredAt_defaultsToTheLedgerClock() {
+            Account account = accountWithOverdraft("0.00");
+
+            Transaction transaction =
+                    account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null);
+
+            assertThat(transaction.occurredAt()).isEqualTo(OPENED_AT);
+            assertThat(transaction.occurredAt()).isEqualTo(transaction.recordedAt());
+        }
+
+        @Test
+        @DisplayName("is rejected when null")
+        void recordMovement_nullOccurredAt_isRejected() {
+            Account account = accountWithOverdraft("0.00");
+
+            assertThatExceptionOfType(NullPointerException.class)
+                    .isThrownBy(() -> account.recordMovement(
+                            TransactionType.DEPOSIT, Money.of("10.00", EUR), null, null))
+                    .withMessageContaining("occurredAt");
+        }
+
+        @Test
+        @DisplayName("is accepted right up to the edge of the window behind the clock")
+        void recordMovement_occurredAtOnTheEarliestAcceptedBoundary_isAccepted() {
+            Account account = accountWithOverdraft("0.00");
+            Instant earliest = OPENED_AT.minus(Transaction.MAX_CLOCK_DRIFT_BEHIND);
+
+            Transaction transaction =
+                    account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null, earliest);
+
+            assertThat(transaction.occurredAt()).isEqualTo(earliest);
+        }
+
+        @Test
+        @DisplayName("is rejected one instant beyond the window behind the clock")
+        void recordMovement_occurredAtJustBeyondTheEarliestBoundary_isRejected() {
+            Account account = accountWithOverdraft("0.00");
+            Instant tooOld = OPENED_AT.minus(Transaction.MAX_CLOCK_DRIFT_BEHIND).minusMillis(1);
+
+            assertThatIllegalArgumentException()
+                    .isThrownBy(() -> account.recordMovement(
+                            TransactionType.DEPOSIT, Money.of("10.00", EUR), null, tooOld))
+                    .withMessageContaining("occurredAt");
+        }
+
+        @Test
+        @DisplayName("is accepted right up to the edge of the window ahead of the clock")
+        void recordMovement_occurredAtOnTheLatestAcceptedBoundary_isAccepted() {
+            Account account = accountWithOverdraft("0.00");
+            Instant latest = OPENED_AT.plus(Transaction.MAX_CLOCK_DRIFT_AHEAD);
+
+            Transaction transaction =
+                    account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null, latest);
+
+            assertThat(transaction.occurredAt()).isEqualTo(latest);
+        }
+
+        @Test
+        @DisplayName("is rejected one instant beyond the window ahead of the clock")
+        void recordMovement_occurredAtJustBeyondTheLatestBoundary_isRejected() {
+            Account account = accountWithOverdraft("0.00");
+            Instant tooFuturistic = OPENED_AT.plus(Transaction.MAX_CLOCK_DRIFT_AHEAD).plusMillis(1);
+
+            assertThatIllegalArgumentException()
+                    .isThrownBy(() -> account.recordMovement(
+                            TransactionType.DEPOSIT, Money.of("10.00", EUR), null, tooFuturistic))
+                    .withMessageContaining("occurredAt");
+        }
+
+        @Test
+        @DisplayName("leaves the ledger completely untouched when it is rejected")
+        void recordMovement_rejectedForDrift_leavesBalanceAndHistoryUnchanged() {
+            Account account = accountWithOverdraft("0.00");
+            account.recordMovement(TransactionType.DEPOSIT, Money.of("100.00", EUR), null);
+
+            assertThatIllegalArgumentException().isThrownBy(() -> account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("50.00", EUR), null,
+                    OPENED_AT.plus(Duration.ofDays(365))));
+
+            assertThat(account.balance().availableBalance()).isEqualTo(Money.of("100.00", EUR));
+            assertThat(account.history(10, 0).total()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("never reorders the history, however out of order the client's clock is")
+        void history_movementsWithOutOfOrderOccurredAt_remainsOrderedByRecordingSequence() {
+            Account account = accountWithOverdraft("0.00");
+
+            // Deliberately descending client times: the last movement claims to be the oldest.
+            Transaction first = account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("10.00", EUR), "first",
+                    OPENED_AT.minus(Duration.ofHours(1)));
+            Transaction second = account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("20.00", EUR), "second",
+                    OPENED_AT.minus(Duration.ofHours(10)));
+            Transaction third = account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("30.00", EUR), "third",
+                    OPENED_AT.minus(Duration.ofHours(20)));
+
+            List<Transaction> history = account.history(10, 0).transactions();
+
+            assertThat(history).extracting(Transaction::reference)
+                    .containsExactly("third", "second", "first");
+            assertThat(history).extracting(Transaction::sequence)
+                    .containsExactly(3L, 2L, 1L);
+            assertThat(first.sequence()).isEqualTo(1L);
+            assertThat(second.sequence()).isEqualTo(2L);
+            assertThat(third.sequence()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("never influences the running balance")
+        void recordMovement_outOfOrderOccurredAt_doesNotAffectTheRunningBalance() {
+            Account account = accountWithOverdraft("0.00");
+
+            Transaction first = account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("10.00", EUR), null,
+                    OPENED_AT.minus(Duration.ofHours(1)));
+            Transaction backdated = account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("20.00", EUR), null,
+                    OPENED_AT.minus(Duration.ofHours(23)));
+
+            // Had the backdated movement been slotted in by its client time, it would have been
+            // applied first and this running balance would read 20.00.
+            assertThat(first.availableBalanceAfter()).isEqualTo(Money.of("10.00", EUR));
+            assertThat(backdated.availableBalanceAfter()).isEqualTo(Money.of("30.00", EUR));
+            assertThat(account.balance().availableBalance()).isEqualTo(Money.of("30.00", EUR));
+        }
+
+        @Test
+        @DisplayName("never influences the overdraft decision")
+        void recordMovement_backdatedWithdrawalBreachingAllowance_isStillRefused() {
+            Account account = accountWithOverdraft("10.00");
+
+            assertThatExceptionOfType(InsufficientFundsException.class)
+                    .isThrownBy(() -> account.recordMovement(
+                            TransactionType.WITHDRAWAL, Money.of("10.01", EUR), null,
+                            OPENED_AT.minus(Duration.ofHours(23))));
+        }
+    }
 }
