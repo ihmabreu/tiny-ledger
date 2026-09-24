@@ -1,0 +1,67 @@
+@startuml record-withdrawal
+!theme plain
+title Recording a withdrawal — the happy path and the refusal
+
+skinparam shadowing false
+
+actor Client
+participant "TransactionResource\n@RunOnVirtualThread" as R
+participant DefaultLedgerService as S
+participant InMemoryAccountRepository as Repo
+participant "Account\n(aggregate)" as A
+participant BalanceSnapshot as Snap
+
+Client -> R : POST /api/v1/accounts/{id}/transactions\n{type, amount, currency, reference}
+activate R
+note right of R
+  Runs on a virtual thread:
+  blocking code, cheap to
+  have thousands of.
+end note
+
+R -> R : bean validation
+R -> S : withdraw(accountId, money, reference)
+activate S
+
+S -> Repo : findById(accountId)
+activate Repo
+Repo --> S : Account
+deactivate Repo
+note right of S
+  Unknown id -> AccountNotFoundException -> 404
+end note
+
+S -> A : recordMovement(WITHDRAWAL, money, reference)
+activate A
+
+A -> A : lock.lock()
+A -> A : requireSameCurrency(money)
+note right of A
+  Mismatch -> CurrencyMismatchException -> 422
+end note
+
+A -> Snap : availableBalance
+A -> A : overdraftPolicy.allows(resultingBalance)
+
+alt allowance exceeded
+  A -> A : lock.unlock()
+  A --> S : InsufficientFundsException
+  S --> R : InsufficientFundsException
+  R --> Client : 422 INSUFFICIENT_FUNDS
+else permitted
+  A -> A : append Transaction (sequence = n+1)
+  A -> Snap : fold(transaction)
+  activate Snap
+  Snap --> A : new snapshot (O(1))
+  deactivate Snap
+  A -> A : volatile write of snapshot
+  A -> A : lock.unlock()
+  A --> S : Transaction
+  deactivate A
+  S --> R : Transaction
+  deactivate S
+  R --> Client : 201 Created + TransactionResponse
+end
+deactivate R
+
+@enduml

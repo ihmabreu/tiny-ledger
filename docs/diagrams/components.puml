@@ -1,0 +1,76 @@
+@startuml components
+!theme plain
+title Tiny Ledger — component view
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+actor Client
+
+package "api" {
+  [AccountResource]      <<JAX-RS>>
+  [TransactionResource]  <<JAX-RS>>
+  [Exception mappers]
+  [DTO mappers]
+}
+
+package "service" {
+  interface LedgerService
+  [DefaultLedgerService]
+}
+
+package "repository" {
+  interface AccountRepository
+  [InMemoryAccountRepository]
+}
+
+package "domain" {
+  [Account]         <<aggregate root>>
+  [Money]           <<value object>>
+  [Transaction]     <<value object>>
+  [BalanceSnapshot] <<value object>>
+  [OverdraftPolicy] <<strategy>>
+}
+
+package "config" {
+  [ClockProducer]
+  [LedgerDataSeeder]
+}
+
+Client --> [AccountResource]     : HTTP /api/v1
+Client --> [TransactionResource] : HTTP /api/v1
+
+[AccountResource]     ..> LedgerService
+[TransactionResource] ..> LedgerService
+[AccountResource]     ..> [DTO mappers]
+[TransactionResource] ..> [DTO mappers]
+[Exception mappers]   ..> [AccountResource]  : translates domain\nexceptions to 400/404/422
+
+LedgerService <|.. [DefaultLedgerService]
+[DefaultLedgerService] ..> AccountRepository
+AccountRepository <|.. [InMemoryAccountRepository]
+[InMemoryAccountRepository] --> [Account] : owns
+
+[Account] --> [Money]
+[Account] --> [Transaction]
+[Account] --> [BalanceSnapshot]
+[Account] ..> [OverdraftPolicy]
+
+[ClockProducer] ..> [DefaultLedgerService] : injects Clock
+[LedgerDataSeeder] ..> LedgerService       : startup only
+
+note right of [Account]
+  Owns the ReentrantLock,
+  the append-only history and
+  the balance snapshot.
+  All invariants live here.
+end note
+
+note bottom of AccountRepository
+  The seam a persistent
+  implementation would use.
+  Nothing above it knows
+  storage is in memory.
+end note
+
+@enduml

@@ -1,0 +1,58 @@
+# Normalise line endings in the repository to LF for anything Git detects as text.
+# Without this, a clone on Windows can commit CRLF into shell scripts and break them.
+* text=auto eol=lf
+
+# --- Scripts ----------------------------------------------------------------
+# gradlew must have LF endings on every platform: a CRLF shebang line makes the
+# script unrunnable on Linux and macOS, which is exactly where CI runs it.
+gradlew           text eol=lf
+*.sh              text eol=lf
+
+# Windows batch files are the mirror image and genuinely need CRLF.
+gradlew.bat       text eol=crlf
+*.bat             text eol=crlf
+*.cmd             text eol=crlf
+
+# --- Source and configuration -----------------------------------------------
+*.java            text diff=java
+*.kt              text diff=kotlin
+*.kts             text diff=kotlin
+*.gradle          text diff=java
+*.properties      text
+*.yaml            text
+*.yml             text
+*.json            text
+*.xml             text
+*.md              text diff=markdown
+*.feature         text
+*.puml            text
+*.http            text
+Dockerfile        text
+.gitattributes    text
+.gitignore        text
+
+# --- Binaries ---------------------------------------------------------------
+# Declared explicitly so Git never attempts line-ending conversion or a textual
+# merge on them. A "corrected" wrapper jar is a broken wrapper jar.
+*.jar             binary
+*.zip             binary
+*.tar.gz          binary
+*.class           binary
+*.png             binary
+*.jpg             binary
+*.jpeg            binary
+*.gif             binary
+*.ico             binary
+*.pdf             binary
+
+# SVG is XML, so it is text and worth diffing - but these particular files are
+# generated from the .puml sources next to them.
+*.svg             text
+
+# --- GitHub language statistics ---------------------------------------------
+# Keep the repository reported as the Java project it is, rather than as
+# whatever the generated diagrams and the vendored wrapper add up to.
+gradle/wrapper/gradle-wrapper.jar linguist-vendored
+gradlew                           linguist-vendored
+gradlew.bat                       linguist-vendored
+docs/diagrams/*.svg               linguist-generated

@@ -1,0 +1,89 @@
+# ---------------------------------------------------------------------------
+# Tiny Ledger — application configuration
+# ---------------------------------------------------------------------------
+
+quarkus:
+  application:
+    name: tiny-ledger
+  http:
+    port: 8080
+
+  # --- API-first -------------------------------------------------------------
+  # The contract in META-INF/openapi.yaml is hand-written and is the single source
+  # of truth. Annotation scanning is disabled so the generated document can never
+  # silently drift away from, or override, the reviewed contract.
+  smallrye-openapi:
+    store-schema-directory: build/openapi
+
+  # Swagger UI is served in every profile: a running instance should always be
+  # explorable, not just in dev mode.
+  swagger-ui:
+    always-include: true
+    path: /q/swagger-ui
+    title: Tiny Ledger API
+
+  # --- Container image (Jib) --------------------------------------------------
+  # Jib assembles image layers directly, so no Dockerfile and no QEMU emulation are
+  # needed to target another architecture.
+  container-image:
+    builder: jib
+    group: teya
+    name: tiny-ledger
+    tag: 1.0.0
+
+  # --- Logging ---------------------------------------------------------------
+  log:
+    level: INFO
+    category:
+      "com.teya.tinyledger":
+        level: INFO
+
+mp:
+  openapi:
+    scan:
+      disable: true
+
+# --- Demo data -------------------------------------------------------------
+ledger:
+  seed:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Test profile
+# ---------------------------------------------------------------------------
+"%test":
+  ledger:
+    seed:
+      # Disabled under test so every tier starts from a deterministic, empty ledger.
+      enabled: false
+  quarkus:
+    smallrye-openapi:
+      # Nothing reads the stored copy, and with scanning disabled it is only ever a
+      # duplicate of the hand-written contract. Writing it on every test boot is
+      # therefore pure noise, and a shared build-directory write that two Quarkus
+      # instances can race on. Switched off under test.
+      store-schema-directory: ""
+    log:
+      level: WARN
+    http:
+      # Bind an ephemeral port instead of the fixed 8081 default, so a tier can be run
+      # while a service is already running locally and two tiers can never collide.
+      # RestAssured reads the assigned port from Quarkus, so no test has to know it.
+      test-port: 0
+
+# ---------------------------------------------------------------------------
+# Multi-arch profile
+# ---------------------------------------------------------------------------
+# The Docker daemon cannot hold a multi-architecture manifest, so a local build
+# produces an image for the host architecture only. Multi-arch is built when
+# pushing to a registry, under the `multiarch` profile:
+#
+#   ./gradlew :app:build -Dquarkus.profile=multiarch \
+#       -Dquarkus.container-image.push=true \
+#       -Dquarkus.container-image.registry=<registry>
+#
+# See docs/CONTAINERISATION.md.
+"%multiarch":
+  quarkus:
+    jib:
+      platforms: linux/amd64,linux/arm64

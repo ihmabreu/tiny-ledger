@@ -1,0 +1,278 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and test (${{ matrix.tier.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Every tier is reported independently, so a failure names the kind of
+      # problem straight away instead of hiding inside one opaque "build failed".
+      fail-fast: false
+      matrix:
+        tier:
+          - { name: unit,        task: ':app:test' }
+          - { name: integration, task: ':app:integrationTest' }
+          - { name: bdd,         task: ':app:bddTest' }
+          - { name: e2e,         task: ':app:e2eTest' }
+          - { name: concurrency, task: ':app:concurrencyTest' }
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run the ${{ matrix.tier.name }} tier
+        run: ./gradlew ${{ matrix.tier.task }} --stacktrace
+
+      - name: Publish the test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.tier.name }}
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  coverage:
+    name: Code coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate the JaCoCo report
+        run: ./gradlew :app:test :app:jacocoTestReport
+
+      - name: Publish the coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: app/build/reports/jacoco/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  javadoc:
+    name: Javadoc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Documentation that does not build is documentation nobody reads, so the
+      # Javadoc is compiled on every change rather than on release only.
+      - name: Build the Javadoc
+        run: ./gradlew :app:javadoc
+
+  load-tests:
+    name: Load tests (compile only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The simulations are compiled but not executed: latency numbers taken on a
+      # shared CI runner would be noise, and failing a pull request on that noise
+      # would teach everyone to ignore the job. They are run deliberately, against
+      # a known environment — see docs/TESTING.md.
+      - name: Compile the Gatling simulations
+        run: ./gradlew :load-tests:gatlingClasses
+
+  container-image:
+    name: Image (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both target architectures are built and, more importantly, actually
+        # started and called. A build that succeeds and an image that boots are
+        # different claims, and only the second one matters.
+        include:
+          - platform: linux/amd64
+            arch: x86_64
+          - platform: linux/arm64
+            arch: aarch64
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Jib needs no emulation to *build* for another architecture - it assembles
+      # layers rather than executing them. QEMU is registered so the runner can
+      # *run* the foreign image in the smoke test below.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{ matrix.platform }}
+
+      - name: Build the ${{ matrix.platform }} image
+        run: |
+          ./gradlew :app:build \
+            -x test -x bddTest -x integrationTest -x concurrencyTest -x e2eTest \
+            -Dquarkus.container-image.build=true \
+            -Dquarkus.jib.platforms=${{ matrix.platform }}
+
+      - name: Verify the image reports the expected architecture
+        run: |
+          set -euo pipefail
+          actual=$(docker image inspect teya/tiny-ledger:1.0.0 --format '{{.Os}}/{{.Architecture}}')
+          echo "image platform: $actual"
+          test "$actual" = "${{ matrix.platform }}"
+
+      - name: Start the container and call the API
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name tiny-ledger \
+            --platform ${{ matrix.platform }} -p 8080:8080 \
+            teya/tiny-ledger:1.0.0
+
+          # An emulated JVM starts slowly, so poll rather than sleeping a guess.
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/api/v1/accounts >/dev/null 2>&1; then
+              echo "service answered after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "service did not start within 60s" >&2
+              docker logs tiny-ledger >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "container arch: $(docker exec tiny-ledger uname -m)"
+          test "$(docker exec tiny-ledger uname -m)" = "${{ matrix.arch }}"
+
+          # Exercise a write path too: a container that only serves a GET has not
+          # proven much about the application inside it.
+          account=$(curl -fsS -X POST http://localhost:8080/api/v1/accounts \
+            -H 'Content-Type: application/json' \
+            -d '{"ownerName":"CI","currency":"EUR"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          curl -fsS -X POST "http://localhost:8080/api/v1/accounts/$account/transactions" \
+            -H 'Content-Type: application/json' \
+            -d '{"type":"DEPOSIT","amount":"100.00","currency":"EUR"}' >/dev/null
+
+          balance=$(curl -fsS "http://localhost:8080/api/v1/accounts/$account/balance" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["availableBalance"])')
+          echo "balance after deposit: $balance"
+          test "$balance" = "100.00"
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f tiny-ledger || true
+
+  multiarch-manifest:
+    name: Multi-architecture manifest list
+    runs-on: ubuntu-latest
+    needs: container-image
+
+    services:
+      # A throwaway registry, because a manifest list is the one thing a local
+      # Docker daemon cannot hold. Without this the multi-arch path would only
+      # ever be exercised by a real release - which is a poor time to find out
+      # it is broken.
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Push a combined amd64 + arm64 image
+        run: |
+          ./gradlew :app:build \
+            -x test -x bddTest -x integrationTest -x concurrencyTest -x e2eTest \
+            -Dquarkus.profile=multiarch \
+            -Dquarkus.container-image.push=true \
+            -Dquarkus.container-image.registry=localhost:5000 \
+            -Dquarkus.container-image.insecure=true
+
+      - name: Assert the manifest list covers both architectures
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            http://localhost:5000/v2/teya/tiny-ledger/manifests/1.0.0 > manifest.json
+
+          python3 - <<'EOF'
+          import json, sys
+
+          manifest = json.load(open("manifest.json"))
+          found = sorted(
+              f"{m['platform']['os']}/{m['platform']['architecture']}"
+              for m in manifest.get("manifests", [])
+          )
+          expected = ["linux/amd64", "linux/arm64"]
+
+          print("platforms in the manifest list:", found)
+          if found != expected:
+              sys.exit(f"expected {expected}, found {found}")
+          EOF

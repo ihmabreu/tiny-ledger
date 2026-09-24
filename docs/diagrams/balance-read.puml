@@ -1,0 +1,36 @@
+@startuml balance-read
+!theme plain
+title Reading a balance — no lock is taken
+
+skinparam shadowing false
+
+actor Client
+participant TransactionResource as R
+participant DefaultLedgerService as S
+participant "Account" as A
+participant "volatile BalanceSnapshot" as Snap
+
+Client -> R : GET /api/v1/accounts/{id}/balance
+activate R
+R -> S : getBalance(accountId)
+activate S
+S -> A : balance()
+activate A
+A -> Snap : volatile read
+note right of Snap
+  The snapshot is immutable and
+  published through a volatile field,
+  so a reader either sees the state
+  before a movement or the state
+  after it, never a torn mix.
+  Readers never block writers.
+end note
+Snap --> A : snapshot
+A --> S : AccountBalance\n(available, overdraft, account)
+deactivate A
+S --> R : AccountBalance
+deactivate S
+R --> Client : 200 OK
+deactivate R
+
+@enduml

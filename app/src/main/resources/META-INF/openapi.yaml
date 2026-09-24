@@ -1,0 +1,467 @@
+openapi: 3.0.3
+
+info:
+  title: Tiny Ledger API
+  description: |
+    A small ledger service that records money movements (deposits and withdrawals),
+    exposes the current balance and returns the transaction history.
+
+    ## Balance model
+
+    Two distinct figures are reported for every account:
+
+    | Figure             | Definition                                | Meaning                                     |
+    |--------------------|-------------------------------------------|---------------------------------------------|
+    | `availableBalance` | `sum(transactions)`                       | The money actually moved in and out         |
+    | `accountBalance`   | `availableBalance + overdraftLimit`       | Total spending power, including the overdraft |
+
+    The overdraft limit is account *metadata* agreed when the account is opened. It is
+    **never** recorded as a transaction, so `availableBalance` always equals the exact sum
+    of the account's transaction history.
+
+    A withdrawal is accepted only while `accountBalance - amount >= 0`.
+
+    ## Monetary amounts
+
+    Amounts are transferred as **strings** (for example `"1250.75"`) to avoid the precision
+    loss that IEEE-754 floating point introduces in many JSON clients. They are held
+    server-side as `BigDecimal` values scaled to the currency's minor unit.
+
+    ## Versioning
+
+    The API is versioned in the URL path (`/api/v1`). See `docs/API_VERSIONING.md`.
+  version: 1.0.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: Accounts
+    description: Account lifecycle and balance enquiries
+  - name: Transactions
+    description: Recording money movements and reading transaction history
+
+paths:
+
+  /api/v1/accounts:
+    post:
+      tags: [Accounts]
+      operationId: openAccount
+      summary: Open a new ledger account
+      description: |
+        Opens an account in a fixed currency, optionally with an agreed overdraft allowance.
+        The account always starts with an `availableBalance` of zero; opening funds are added
+        by recording a normal deposit afterwards.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenAccountRequest'
+      responses:
+        '201':
+          description: Account opened
+          headers:
+            Location:
+              description: URL of the newly created account
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    get:
+      tags: [Accounts]
+      operationId: listAccounts
+      summary: List all accounts
+      responses:
+        '200':
+          description: All known accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Account'
+
+  /api/v1/accounts/{accountId}:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Accounts]
+      operationId: getAccount
+      summary: Get a single account
+      responses:
+        '200':
+          description: The account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/accounts/{accountId}/balance:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Accounts]
+      operationId: getBalance
+      summary: View the current balance
+      description: |
+        Returns the available balance (sum of all transactions) and the account balance
+        (available balance plus the agreed overdraft allowance).
+      responses:
+        '200':
+          description: The current balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Balance'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/accounts/{accountId}/transactions:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    post:
+      tags: [Transactions]
+      operationId: recordTransaction
+      summary: Record a money movement (deposit or withdrawal)
+      description: |
+        Records a deposit or a withdrawal against the account. The amount must be strictly
+        positive and its currency must match the account currency. Withdrawals are rejected
+        with `422` when they would push the account balance below zero.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordTransactionRequest'
+      responses:
+        '201':
+          description: Movement recorded
+          headers:
+            Location:
+              description: URL of the account's transaction history
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+    get:
+      tags: [Transactions]
+      operationId: getTransactionHistory
+      summary: View the transaction history
+      description: Returns the account's transactions, most recent first, in pages.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of transactions to return.
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          description: Number of transactions to skip, counting from the most recent.
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: A page of transactions, most recent first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionHistory'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+
+  parameters:
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      description: Unique identifier of the account.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: The request was malformed (for example a non-positive amount or an unknown currency code).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: No account exists with the supplied identifier.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnprocessableEntity:
+      description: |
+        The request was well-formed but violates a business rule, such as insufficient funds
+        or a currency that differs from the account currency.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+
+    MonetaryAmount:
+      type: string
+      description: A decimal monetary amount, transferred as a string to preserve precision.
+      pattern: '^-?\d+(\.\d+)?$'
+      example: '1250.75'
+
+    CurrencyCode:
+      type: string
+      description: An ISO 4217 currency code.
+      pattern: '^[A-Z]{3}$'
+      example: EUR
+
+    TransactionType:
+      type: string
+      description: The direction of a money movement.
+      enum:
+        - DEPOSIT
+        - WITHDRAWAL
+
+    OpenAccountRequest:
+      type: object
+      required:
+        - ownerName
+        - currency
+      properties:
+        ownerName:
+          type: string
+          description: Name of the account holder.
+          minLength: 1
+          maxLength: 120
+          example: Ada Lovelace
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        overdraftLimit:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: |
+            Agreed overdraft allowance, as a non-negative amount. Defaults to `"0"`.
+            This is account metadata and is never recorded as a transaction.
+          default: '0'
+          example: '500.00'
+
+    Account:
+      type: object
+      required:
+        - id
+        - ownerName
+        - currency
+        - overdraftLimit
+        - availableBalance
+        - accountBalance
+        - openedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        ownerName:
+          type: string
+          example: Ada Lovelace
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        overdraftLimit:
+          $ref: '#/components/schemas/MonetaryAmount'
+        availableBalance:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: Sum of all transactions recorded against the account.
+        accountBalance:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: Available balance plus the agreed overdraft allowance.
+        openedAt:
+          type: string
+          format: date-time
+
+    Balance:
+      type: object
+      required:
+        - accountId
+        - currency
+        - availableBalance
+        - accountBalance
+        - overdraftLimit
+        - transactionCount
+        - calculatedAt
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        availableBalance:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: Sum of all transactions recorded against the account.
+        accountBalance:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: Available balance plus the agreed overdraft allowance.
+        overdraftLimit:
+          $ref: '#/components/schemas/MonetaryAmount'
+        transactionCount:
+          type: integer
+          format: int32
+          description: Number of transactions folded into the balance.
+        calculatedAt:
+          type: string
+          format: date-time
+          description: |
+            Timestamp of the most recent transaction included in the balance, or the time the
+            account was opened when no transactions exist yet.
+
+    RecordTransactionRequest:
+      type: object
+      required:
+        - type
+        - amount
+        - currency
+      properties:
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        amount:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: A strictly positive amount. The direction is given by `type`.
+          example: '100.00'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        reference:
+          type: string
+          description: Optional free-text note describing the movement.
+          maxLength: 140
+          example: Salary payment
+
+    Transaction:
+      type: object
+      required:
+        - id
+        - accountId
+        - type
+        - amount
+        - currency
+        - availableBalanceAfter
+        - recordedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        amount:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: The positive amount that was moved.
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        availableBalanceAfter:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: The account's available balance immediately after this movement.
+        reference:
+          type: string
+          nullable: true
+          description: Optional free-text note supplied when the movement was recorded.
+        recordedAt:
+          type: string
+          format: date-time
+
+    TransactionHistory:
+      type: object
+      required:
+        - accountId
+        - transactions
+        - limit
+        - offset
+        - total
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        transactions:
+          type: array
+          description: The requested page of transactions, ordered most recent first.
+          items:
+            $ref: '#/components/schemas/Transaction'
+        limit:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int32
+        total:
+          type: integer
+          format: int32
+          description: Total number of transactions on the account.
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+        - timestamp
+      properties:
+        code:
+          type: string
+          description: Stable, machine-readable error code.
+          enum:
+            - VALIDATION_FAILED
+            - ACCOUNT_NOT_FOUND
+            - INSUFFICIENT_FUNDS
+            - CURRENCY_MISMATCH
+            - INTERNAL_ERROR
+          example: INSUFFICIENT_FUNDS
+        message:
+          type: string
+          description: Human-readable explanation of what went wrong.
+          example: Withdrawal of 200.00 EUR would exceed the agreed overdraft limit of 50.00 EUR
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: array
+          description: Field-level messages, present for validation failures.
+          items:
+            type: string
