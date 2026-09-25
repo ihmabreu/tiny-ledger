@@ -149,6 +149,47 @@ were reviewed and committed. Generated specs drift to describe whatever the code
 a hand-written one states what the code is *supposed* to do, and the contract tests then hold
 the code to it.
 
+**Every `POST /transactions` requires a client-supplied `Idempotency-Key` header,** protecting
+the ledger against processing the same money movement twice. Two distinct failure modes make
+this necessary:
+
+- *Network-level retries.* A client posts a withdrawal; the server applies it but the response
+  is lost (timeout, connection reset). Not knowing whether it succeeded, the client retries the
+  identical `POST`, which is not naturally idempotent. Without protection this produces two
+  withdrawals for one intended movement.
+- *Business-level accidental duplication* (a double-click, a replayed batch row) cannot be told
+  apart from two genuinely separate, coincidentally identical movements by content alone — the
+  server has no way to know the caller's intent, only the caller does.
+
+The key is remembered per account, together with the `type` and `amount` of the movement it
+produced, for as long as the account exists (unbounded, consistent with the rest of the
+in-memory design). Three outcomes:
+
+1. **Key not seen before** — the movement is recorded as normal and the key is stored.
+2. **Key seen, same `type` and `amount`** — the *original* `201` response is returned again.
+   Nothing is re-appended to the history and the balance does not move a second time. This is
+   the safe-retry path.
+3. **Key seen, different `type` or `amount`** — the same key was reused for a different
+   movement, almost certainly a client bug. Refused with `409 Conflict` /
+   `IDEMPOTENCY_KEY_REUSED`, a distinct meaning from the generic `422` used for other business
+   rule violations, via its own `ExceptionMapper`.
+
+The check is performed under the same per-account lock that guards the balance and history:
+"have I seen this key?" and "append the movement" must be one atomic step, exactly like the
+overdraft check, or two concurrent retries carrying the same key could both observe "not seen
+yet" and both apply.
+
+The fingerprint deliberately **excludes `reference`** — a free-text annotation is not part of
+the financial intent a key protects. It also deliberately **does not cover account creation**
+(`POST /accounts`): duplicate-account creation is a different, lower-stakes problem than
+duplicate money movements, and was left out of scope for this iteration.
+
+One implementation-level judgement call: **a movement refused by the overdraft check does not
+consume its key.** Nothing was applied, so there is nothing to protect against re-applying — a
+caller who tops up funds and retries with the same key genuinely gets to try again, rather than
+being permanently locked out by a key that only ever failed. The guarantee being built is "never
+applied twice," and a failed attempt was never applied once.
+
 ---
 
 ## Storage and lifecycle

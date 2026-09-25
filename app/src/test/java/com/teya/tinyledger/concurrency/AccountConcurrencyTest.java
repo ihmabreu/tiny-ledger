@@ -5,6 +5,7 @@ import com.teya.tinyledger.domain.BalanceSnapshot;
 import com.teya.tinyledger.domain.Money;
 import com.teya.tinyledger.domain.Transaction;
 import com.teya.tinyledger.domain.TransactionType;
+import com.teya.tinyledger.domain.exception.DuplicateIdempotencyKeyException;
 import com.teya.tinyledger.domain.exception.InsufficientFundsException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -246,5 +247,48 @@ class AccountConcurrencyTest {
 
         assertThat(account.balance().availableBalance())
                 .isEqualTo(Money.of(writers * MOVEMENTS_PER_THREAD + ".00", EUR));
+    }
+
+    @Test
+    @Timeout(value = 2, unit = TimeUnit.MINUTES)
+    @DisplayName("records exactly one transaction when many threads race with the same idempotency key")
+    void recordMovement_manyConcurrentCallsWithSameIdempotencyKey_recordsExactlyOneTransaction() throws Exception {
+        Account account = newAccount("0.00");
+        String sharedKey = "shared-race-key";
+
+        List<Transaction> results = runConcurrently(THREADS,
+                () -> account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null, sharedKey));
+
+        // Every caller, however many raced for the lock, must be handed back the very same
+        // transaction: that is the whole guarantee an idempotency key exists to provide.
+        assertThat(results).allSatisfy(transaction -> assertThat(transaction).isEqualTo(results.getFirst()));
+        assertThat(account.balance().availableBalance()).isEqualTo(Money.of("10.00", EUR));
+        assertThat(account.history(1, 0).total()).isEqualTo(1);
+    }
+
+    @Test
+    @Timeout(value = 2, unit = TimeUnit.MINUTES)
+    @DisplayName("refuses every concurrent caller but one when the same key is reused for different amounts")
+    void recordMovement_manyConcurrentCallsWithSameKeyDifferentAmounts_exactlyOneSucceedsRestConflict() throws Exception {
+        Account account = newAccount("0.00");
+        String sharedKey = "shared-conflict-key";
+        AtomicInteger nextAmount = new AtomicInteger();
+        AtomicInteger succeeded = new AtomicInteger();
+        AtomicInteger conflicted = new AtomicInteger();
+
+        runConcurrently(THREADS, () -> {
+            String amount = nextAmount.incrementAndGet() + ".00";
+            try {
+                account.recordMovement(TransactionType.DEPOSIT, Money.of(amount, EUR), null, sharedKey);
+                succeeded.incrementAndGet();
+            } catch (DuplicateIdempotencyKeyException e) {
+                conflicted.incrementAndGet();
+            }
+            return null;
+        });
+
+        assertThat(succeeded.get()).isEqualTo(1);
+        assertThat(conflicted.get()).isEqualTo(THREADS - 1);
+        assertThat(account.history(1, 0).total()).isEqualTo(1);
     }
 }

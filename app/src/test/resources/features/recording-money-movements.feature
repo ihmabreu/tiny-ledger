@@ -73,3 +73,13 @@ Feature: Recording money movements
     When I deposit 50.00 EUR into "Ada", claiming it will happen in 2 hours
     Then the movement is rejected as invalid
     And the transaction history of "Ada" is empty
+
+  Scenario: Retrying a deposit with the same idempotency key does not double the balance
+    When I deposit 250.00 EUR into "Ada" using idempotency key "salary-key-1"
+    Then the deposit is accepted
+    And the available balance of "Ada" is 250.00 EUR
+    When I retry that same request
+    Then the deposit is accepted
+    And the available balance of "Ada" is 250.00 EUR
+    When I view the transaction history of "Ada"
+    Then the history reports a total of 1 movements

@@ -8,6 +8,7 @@ import com.teya.tinyledger.domain.Transaction;
 import com.teya.tinyledger.domain.TransactionPage;
 import com.teya.tinyledger.domain.TransactionType;
 import com.teya.tinyledger.domain.exception.CurrencyMismatchException;
+import com.teya.tinyledger.domain.exception.DuplicateIdempotencyKeyException;
 import com.teya.tinyledger.domain.exception.InsufficientFundsException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -421,7 +422,7 @@ class AccountTest {
 
             assertThatExceptionOfType(NullPointerException.class)
                     .isThrownBy(() -> account.recordMovement(
-                            TransactionType.DEPOSIT, Money.of("10.00", EUR), null, null))
+                            TransactionType.DEPOSIT, Money.of("10.00", EUR), null, (Instant) null))
                     .withMessageContaining("occurredAt");
         }
 
@@ -542,6 +543,99 @@ class AccountTest {
                     .isThrownBy(() -> account.recordMovement(
                             TransactionType.WITHDRAWAL, Money.of("10.01", EUR), null,
                             OPENED_AT.minus(Duration.ofHours(23))));
+        }
+    }
+
+    @Nested
+    @DisplayName("idempotency")
+    class Idempotency {
+
+        @Test
+        @DisplayName("records a movement normally the first time a key is used")
+        void recordMovement_newIdempotencyKey_recordsMovementNormally() {
+            Account account = accountWithOverdraft("0");
+
+            Transaction transaction = account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("10.00", EUR), "Salary", "key-1");
+
+            assertThat(transaction.availableBalanceAfter()).isEqualTo(Money.of("10.00", EUR));
+            assertThat(account.history(10, 0).total()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("replaying the same key with the same type and amount returns the original transaction")
+        void recordMovement_matchingReplay_returnsOriginalTransactionWithoutRecordingAgain() {
+            Account account = accountWithOverdraft("0");
+            Transaction original = account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("10.00", EUR), "Salary", "key-1");
+
+            Transaction replay = account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("10.00", EUR), "A different reference", "key-1");
+
+            assertThat(replay).isEqualTo(original);
+            assertThat(account.balance().availableBalance()).isEqualTo(Money.of("10.00", EUR));
+            assertThat(account.history(10, 0).total()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("replaying the same key with a different amount is refused")
+        void recordMovement_replayWithDifferentAmount_throwsDuplicateIdempotencyKeyException() {
+            Account account = accountWithOverdraft("0");
+            account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null, "key-1");
+
+            assertThatExceptionOfType(DuplicateIdempotencyKeyException.class).isThrownBy(
+                    () -> account.recordMovement(
+                            TransactionType.DEPOSIT, Money.of("20.00", EUR), null, "key-1"));
+            assertThat(account.history(10, 0).total()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("replaying the same key with a different type is refused")
+        void recordMovement_replayWithDifferentType_throwsDuplicateIdempotencyKeyException() {
+            Account account = accountWithOverdraft("0");
+            account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null, "key-1");
+
+            assertThatExceptionOfType(DuplicateIdempotencyKeyException.class).isThrownBy(
+                    () -> account.recordMovement(
+                            TransactionType.WITHDRAWAL, Money.of("10.00", EUR), null, "key-1"));
+        }
+
+        @Test
+        @DisplayName("rejects a blank idempotency key")
+        void recordMovement_blankIdempotencyKey_throwsIllegalArgumentException() {
+            Account account = accountWithOverdraft("0");
+
+            assertThatIllegalArgumentException().isThrownBy(() -> account.recordMovement(
+                    TransactionType.DEPOSIT, Money.of("10.00", EUR), null, "   "));
+        }
+
+        @Test
+        @DisplayName("does not consume the key when the movement is refused for insufficient funds")
+        void recordMovement_refusedForInsufficientFunds_doesNotConsumeKeySoRetryAfterTopUpSucceeds() {
+            Account account = accountWithOverdraft("0");
+
+            assertThatExceptionOfType(InsufficientFundsException.class).isThrownBy(
+                    () -> account.recordMovement(
+                            TransactionType.WITHDRAWAL, Money.of("10.00", EUR), null, "key-1"));
+
+            account.recordMovement(TransactionType.DEPOSIT, Money.of("10.00", EUR), null, "key-2");
+            Transaction retried = account.recordMovement(
+                    TransactionType.WITHDRAWAL, Money.of("10.00", EUR), null, "key-1");
+
+            assertThat(retried.type()).isEqualTo(TransactionType.WITHDRAWAL);
+            assertThat(account.balance().availableBalance()).isEqualTo(Money.zero(EUR));
+        }
+
+        @Test
+        @DisplayName("the no-key overload generates a distinct key per call so repeated movements are all recorded")
+        void recordMovement_withoutExplicitKey_recordsEachCallAsDistinctMovement() {
+            Account account = accountWithOverdraft("0");
+
+            account.recordMovement(TransactionType.DEPOSIT, Money.of("1.00", EUR), null);
+            account.recordMovement(TransactionType.DEPOSIT, Money.of("1.00", EUR), null);
+
+            assertThat(account.history(10, 0).total()).isEqualTo(2);
+            assertThat(account.balance().availableBalance()).isEqualTo(Money.of("2.00", EUR));
         }
     }
 }

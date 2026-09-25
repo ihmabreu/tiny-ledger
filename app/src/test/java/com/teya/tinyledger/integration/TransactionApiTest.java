@@ -298,4 +298,69 @@ class TransactionApiTest extends AbstractContractTest {
                 .body("transactions.reference", contains("third", "second", "first"))
                 .body("transactions.availableBalanceAfter", contains("60.00", "30.00", "10.00"));
     }
+
+    @Test
+    @DisplayName("a request with no Idempotency-Key header is refused with 400")
+    void recordTransaction_missingIdempotencyKeyHeader_returnsBadRequest() {
+        String accountId = openAccount("Idempotency Guard", "EUR", "0.00");
+
+        recordWithoutIdempotencyKey(accountId, "DEPOSIT", "10.00", "EUR")
+                .then()
+                .statusCode(400)
+                .body("code", equalTo("VALIDATION_FAILED"))
+                // Spelled out rather than referencing TransactionResource's constant: this is
+                // the wire-facing name, so renaming the constant must fail here, not pass.
+                .body("message", equalTo("Header 'Idempotency-Key' is required"));
+    }
+
+    @Test
+    @DisplayName("replaying the same Idempotency-Key with the same body returns the original 201 again")
+    void recordTransaction_replayedIdempotencyKey_returnsOriginalResponseWithoutDoubleRecording() {
+        String accountId = openAccount("Idempotent Retry", "EUR", "0.00");
+        String key = "retry-key-1";
+
+        io.restassured.response.Response first =
+                record(accountId, "DEPOSIT", "25.00", "EUR", "Salary", key);
+        first.then().statusCode(201);
+        String firstTransactionId = first.jsonPath().getString("id");
+
+        record(accountId, "DEPOSIT", "25.00", "EUR", "Salary", key)
+                .then()
+                .statusCode(201)
+                .body("id", equalTo(firstTransactionId))
+                .body("availableBalanceAfter", equalTo("25.00"));
+
+        api().when().get("/api/v1/accounts/{accountId}/transactions", accountId)
+                .then()
+                .statusCode(200)
+                .body("total", equalTo(1));
+    }
+
+    @Test
+    @DisplayName("reusing an Idempotency-Key for a different amount is refused with 409")
+    void recordTransaction_idempotencyKeyReusedForDifferentAmount_returnsConflict() {
+        String accountId = openAccount("Idempotency Conflict", "EUR", "0.00");
+        String key = "conflict-key-1";
+        record(accountId, "DEPOSIT", "25.00", "EUR", null, key).then().statusCode(201);
+
+        record(accountId, "DEPOSIT", "30.00", "EUR", null, key)
+                .then()
+                .statusCode(409)
+                .body("code", equalTo("IDEMPOTENCY_KEY_REUSED"));
+    }
+
+    @Test
+    @DisplayName("an Idempotency-Key refused for insufficient funds is not consumed and a later retry can succeed")
+    void recordTransaction_idempotencyKeyRefusedForInsufficientFunds_canBeRetriedAfterTopUp() {
+        String accountId = openAccount("Idempotency Retry After Top-Up", "EUR", "0.00");
+        String key = "retry-after-top-up";
+
+        record(accountId, "WITHDRAWAL", "10.00", "EUR", null, key).then().statusCode(422);
+        record(accountId, "DEPOSIT", "10.00", "EUR", null).then().statusCode(201);
+
+        record(accountId, "WITHDRAWAL", "10.00", "EUR", null, key)
+                .then()
+                .statusCode(201)
+                .body("availableBalanceAfter", equalTo("0.00"));
+    }
 }

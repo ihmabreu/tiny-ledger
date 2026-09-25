@@ -144,6 +144,23 @@ paths:
         echoed back, but never used for the balance, the overdraft decision or the ordering of
         the history — those follow the ledger's own `recordedAt` clock. A value outside the
         accepted drift window is rejected with `400`.
+
+        Requires an `Idempotency-Key` header, a caller-generated opaque string identifying the
+        request. Replaying the same key with the same body returns the original `201` response
+        again without recording the movement a second time, making retries after a lost
+        response safe. Replaying the same key with a different `type` or `amount` is refused
+        with `409`, since that means the key was reused for two distinct movements.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: |
+            An opaque, caller-generated string (a UUID is a natural choice) identifying this
+            request. Reuse the same value verbatim when retrying a request whose response was
+            not received.
+          schema:
+            type: string
+            minLength: 1
       requestBody:
         required: true
         content:
@@ -152,7 +169,9 @@ paths:
               $ref: '#/components/schemas/RecordTransactionRequest'
       responses:
         '201':
-          description: Movement recorded
+          description: |
+            Movement recorded, or the original movement's response returned again because the
+            `Idempotency-Key` was replayed with the same `type` and `amount`.
           headers:
             Location:
               description: URL of the account's transaction history
@@ -167,6 +186,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
     get:
@@ -235,6 +256,14 @@ components:
       description: |
         The request was well-formed but violates a business rule, such as insufficient funds
         or a currency that differs from the account currency.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: |
+        The `Idempotency-Key` was already used to record a movement with a different `type` or
+        `amount`.
       content:
         application/json:
           schema:
@@ -486,6 +515,7 @@ components:
             - ACCOUNT_NOT_FOUND
             - INSUFFICIENT_FUNDS
             - CURRENCY_MISMATCH
+            - IDEMPOTENCY_KEY_REUSED
             - INTERNAL_ERROR
           example: INSUFFICIENT_FUNDS
         message:

@@ -90,7 +90,7 @@ Keep the `id` for the calls below:
 ACCOUNT=8a39b1ce-3d4b-4802-a3bc-3b9ca5d59c50
 ```
 
-Record a deposit. Two fields deserve a note:
+Record a deposit. Two fields and one header deserve a note:
 
 - `currency` is mandatory — stating it explicitly lets the ledger reject a movement aimed at
   the wrong account rather than silently assuming the caller meant EUR.
@@ -98,10 +98,13 @@ Record a deposit. Two fields deserve a note:
   stores it and hands it back, but never uses it for the balance or the order of the
   statement; those follow the ledger's own `recordedAt` clock. See
   [Two timestamps](#two-timestamps).
+- `Idempotency-Key` header is mandatory — it lets you retry a request safely if the response is
+  lost. See [Retrying safely](#retrying-safely) below.
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 3f29b6b0-6e0a-4b8e-9f0a-1a2b3c4d5e6f' \
   -d "{\"type\": \"DEPOSIT\", \"amount\": \"1000.00\", \"currency\": \"EUR\",
        \"reference\": \"Salary\", \"occurredAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
@@ -125,6 +128,7 @@ Record a withdrawal:
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 9d3e2a1c-5b7f-4e6d-8a90-2c1b0f9e8d7c' \
   -d "{\"type\": \"WITHDRAWAL\", \"amount\": \"120.50\", \"currency\": \"EUR\",
        \"reference\": \"Groceries\", \"occurredAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
@@ -182,6 +186,7 @@ Try to spend past the overdraft allowance and the request is refused:
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 7a6b5c4d-3e2f-410a-9b8c-7d6e5f4a3b2c' \
   -d "{\"type\": \"WITHDRAWAL\", \"amount\": \"99999.00\", \"currency\": \"EUR\",
        \"occurredAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
@@ -196,14 +201,44 @@ curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
 
 Send a movement in the wrong currency and it is refused too, with `CURRENCY_MISMATCH`.
 
+### Retrying safely
+
+`POST /transactions` requires an `Idempotency-Key` header — an opaque, caller-generated string
+(a UUID is the natural choice). If a response is lost to a timeout or a dropped connection, the
+client does not know whether the movement was applied; retrying an ordinary `POST` unprotected
+would risk recording it twice. Reusing the *same* key on the retry makes this safe:
+
+```bash
+# First attempt — the response never arrives (simulated: pretend the connection dropped here)
+curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: c2d1e0f9-8a7b-46c5-9d4e-3f2a1b0c9d8e' \
+  -d "{\"type\": \"DEPOSIT\", \"amount\": \"50.00\", \"currency\": \"EUR\",
+       \"reference\": \"Refund\", \"occurredAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+# Retry with the identical key: the original 201 response comes back, unchanged; the balance
+# does not move a second time.
+curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: c2d1e0f9-8a7b-46c5-9d4e-3f2a1b0c9d8e' \
+  -d "{\"type\": \"DEPOSIT\", \"amount\": \"50.00\", \"currency\": \"EUR\",
+       \"reference\": \"Refund\", \"occurredAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+```
+
+Reusing a key for a *different* `type` or `amount` is refused with `409 Conflict` /
+`IDEMPOTENCY_KEY_REUSED`, since that means the key was reused for two distinct movements — a
+client bug rather than a safe retry. See [ASSUMPTIONS.md](docs/ASSUMPTIONS.md) for the full
+design, including why a movement refused for insufficient funds does not consume its key.
+
 ### What the status codes mean
 
 | Status | Meaning                                                                       |
 |--------|-------------------------------------------------------------------------------|
 | `200`  | Read succeeded                                                                |
-| `201`  | Account opened, or transaction recorded                                       |
-| `400`  | The request is malformed — bad currency code, non-positive amount, bad `limit`, missing or implausible `occurredAt` |
+| `201`  | Account opened, or transaction recorded (including a replayed `Idempotency-Key`) |
+| `400`  | The request is malformed — bad currency code, non-positive amount, bad `limit`, missing `Idempotency-Key`, missing or implausible `occurredAt` |
 | `404`  | No such account                                                               |
+| `409`  | The `Idempotency-Key` was reused for a movement with a different `type` or `amount` |
 | `422`  | The request is well-formed but a business rule rejected it — insufficient funds, currency mismatch |
 | `500`  | Unexpected failure                                                            |
 

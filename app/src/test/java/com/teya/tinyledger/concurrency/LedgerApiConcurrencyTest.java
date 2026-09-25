@@ -50,6 +50,7 @@ class LedgerApiConcurrencyTest {
 
     private static Response deposit(String accountId, String amount) {
         return given().contentType(ContentType.JSON).accept(ContentType.JSON)
+                .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                 .body("""
                         {"type":"DEPOSIT","amount":"%s","currency":"EUR","occurredAt":"%s"}
                         """.formatted(amount, Instant.now()))
@@ -58,6 +59,7 @@ class LedgerApiConcurrencyTest {
 
     private static Response withdraw(String accountId, String amount) {
         return given().contentType(ContentType.JSON).accept(ContentType.JSON)
+                .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                 .body("""
                         {"type":"WITHDRAWAL","amount":"%s","currency":"EUR","occurredAt":"%s"}
                         """.formatted(amount, Instant.now()))
@@ -190,5 +192,34 @@ class LedgerApiConcurrencyTest {
         assertThat(new BigDecimal(reportedBalance))
                 .isEqualByComparingTo(new BigDecimal(CLIENTS * 3 + ".00"));
         assertThat(transactions).hasSize(100);
+    }
+
+    @Test
+    @Timeout(value = 2, unit = TimeUnit.MINUTES)
+    @DisplayName("records exactly one deposit when many concurrent requests share the same Idempotency-Key")
+    void deposit_concurrentRequestsWithSameIdempotencyKey_recordsExactlyOnce() throws Exception {
+        String accountId = openAccount("0.00");
+        String sharedKey = "api-shared-race-key";
+        AtomicInteger created = new AtomicInteger();
+
+        runConcurrently(CLIENTS, () -> {
+            Response response = given().contentType(ContentType.JSON).accept(ContentType.JSON)
+                    .header("Idempotency-Key", sharedKey)
+                    .body("""
+                            {"type":"DEPOSIT","amount":"10.00","currency":"EUR","occurredAt":"%s"}
+                            """.formatted(Instant.now()))
+                    .when().post("/api/v1/accounts/{id}/transactions", accountId);
+            response.then().statusCode(201);
+            created.incrementAndGet();
+        });
+
+        assertThat(created.get()).isEqualTo(CLIENTS);
+
+        given().accept(ContentType.JSON)
+                .when().get("/api/v1/accounts/{id}/balance", accountId)
+                .then()
+                .statusCode(200)
+                .body("availableBalance", org.hamcrest.Matchers.equalTo("10.00"))
+                .body("transactionCount", org.hamcrest.Matchers.equalTo(1));
     }
 }

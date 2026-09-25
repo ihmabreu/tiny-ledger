@@ -86,8 +86,18 @@ public class DefaultLedgerService implements LedgerService {
                                       TransactionType type,
                                       Money amount,
                                       String reference,
-                                      Instant occurredAt) {
-        return getAccount(accountId).recordMovement(type, amount, reference, occurredAt);
+                                      String idempotencyKey) {
+        return getAccount(accountId).recordMovement(type, amount, reference, idempotencyKey);
+    }
+
+    @Override
+    public Transaction recordMovement(UUID accountId,
+                                      TransactionType type,
+                                      Money amount,
+                                      String reference,
+                                      Instant occurredAt,
+                                      String idempotencyKey) {
+        return getAccount(accountId).recordMovement(type, amount, reference, occurredAt, idempotencyKey);
     }
 
     @Override

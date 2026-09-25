@@ -70,6 +70,7 @@ final class LedgerLoadSupport {
     static ChainBuilder deposit() {
         return exec(http("Record deposit")
                 .post("/api/v1/accounts/#{accountId}/transactions")
+                .header("Idempotency-Key", session -> java.util.UUID.randomUUID().toString())
                 .body(StringBody(session -> """
                         {"type":"DEPOSIT","amount":"10.00","currency":"EUR","reference":"Load test deposit","occurredAt":"%s"}
                         """.formatted(Instant.now())))
@@ -84,6 +85,7 @@ final class LedgerLoadSupport {
     static ChainBuilder withdraw() {
         return exec(http("Record withdrawal")
                 .post("/api/v1/accounts/#{accountId}/transactions")
+                .header("Idempotency-Key", session -> java.util.UUID.randomUUID().toString())
                 .body(StringBody(session -> """
                         {"type":"WITHDRAWAL","amount":"5.00","currency":"EUR","reference":"Load test withdrawal","occurredAt":"%s"}
                         """.formatted(Instant.now())))

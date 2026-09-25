@@ -1,13 +1,16 @@
 package com.teya.tinyledger.domain;
 
 import com.teya.tinyledger.domain.exception.CurrencyMismatchException;
+import com.teya.tinyledger.domain.exception.DuplicateIdempotencyKeyException;
 import com.teya.tinyledger.domain.exception.InsufficientFundsException;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Currency;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
@@ -50,6 +53,17 @@ import java.util.concurrent.locks.ReentrantLock;
  * {@code volatile} field, so readers observe a consistent, if possibly momentarily older,
  * picture without ever blocking a writer. Callers needing the balance and the history to agree
  * exactly should use {@link #consistentView()}.</p>
+ *
+ * <h2>Idempotency</h2>
+ *
+ * <p>Every movement is recorded against a caller-supplied idempotency key. The key is
+ * remembered together with the movement's type and amount for the lifetime of the account, and
+ * checked under the same lock that guards the balance: replaying a key with the same type and
+ * amount returns the original {@link Transaction} without recording anything a second time;
+ * replaying it with a different type or amount is refused, since that means the same key was
+ * reused for two distinct movements. A movement that is refused by the overdraft check does not
+ * consume its key &mdash; nothing was applied, so there is nothing to protect against
+ * re-applying, and a caller who tops up funds may retry with the same key.</p>
  */
 public final class Account {
 
@@ -68,6 +82,9 @@ public final class Account {
 
     /** Immutable running balance; written under {@link #lock}, read without it. */
     private volatile BalanceSnapshot balanceSnapshot;
+
+    /** Idempotency keys seen so far, guarded by {@link #lock}. */
+    private final Map<String, IdempotencyRecord> idempotencyRecords = new HashMap<>();
 
     private Account(UUID id,
                     String ownerName,
@@ -124,11 +141,13 @@ public final class Account {
     }
 
     /**
-     * Records a money movement against this account, timing it as having happened now.
+    /**
+     * Records a money movement against this account, timing it as having happened now and under
+     * an auto-generated idempotency key.
      *
-     * <p>Convenience for callers that have no separate client-supplied event time &mdash; the
-     * seed data and the parts of the test suite that are not about timing. The event time is
-     * taken from the ledger's own clock, so it coincides with the booking time.</p>
+     * <p>Convenience for callers that have no separate client-supplied event time and are not
+     * exposed to network retries &mdash; the seed data and the parts of the test suite that are
+     * not about timing or idempotency.</p>
      *
      * @param type      whether money moves in or out
      * @param amount    the strictly positive amount to move, in the account currency
@@ -139,20 +158,14 @@ public final class Account {
      * @throws InsufficientFundsException   if the movement would breach the overdraft allowance
      */
     public Transaction recordMovement(TransactionType type, Money amount, String reference) {
-        return recordMovement(type, amount, reference, clock.instant());
+        return recordMovement(type, amount, reference, clock.instant(), UUID.randomUUID().toString());
     }
 
     /**
-     * Records a money movement against this account.
+     * Records a money movement against this account with an explicit event time and an
+     * auto-generated idempotency key.
      *
-     * <p>Validation that needs no shared state is performed before the lock is taken, keeping
-     * the critical section as short as possible.</p>
-     *
-     * <p>{@code occurredAt} is recorded verbatim and otherwise ignored: the movement's position
-     * in the history, the running balance and the overdraft decision are all driven by the
-     * booking time and the account-scoped sequence, never by the client's clock. Its only
-     * constraint is that it must fall within the drift window documented on
-     * {@link Transaction}, which is checked when the transaction is constructed.</p>
+     * <p>Convenience for callers testing client event time without testing idempotency keys.</p>
      *
      * @param type       whether money moves in or out
      * @param amount     the strictly positive amount to move, in the account currency
@@ -166,9 +179,80 @@ public final class Account {
      * @throws InsufficientFundsException   if the movement would breach the overdraft allowance
      */
     public Transaction recordMovement(TransactionType type, Money amount, String reference, Instant occurredAt) {
+        return recordMovement(type, amount, reference, occurredAt, UUID.randomUUID().toString());
+    }
+
+    /**
+     * Records a money movement against this account, protected against being applied twice for
+     * the same {@code idempotencyKey}, timing it as having happened now.
+     *
+     * <p>Convenience for callers testing idempotency without separate client event time.</p>
+     *
+     * @param type           whether money moves in or out
+     * @param amount         the strictly positive amount to move, in the account currency
+     * @param reference      an optional free-text note, may be {@code null} or blank
+     * @param idempotencyKey a caller-supplied key identifying this movement; replaying the same
+     *                       key with the same {@code type} and {@code amount} is a safe retry
+     * @return the recorded transaction, or the original transaction if this key, type and
+     *         amount were seen before
+     * @throws IllegalArgumentException          if the amount is not strictly positive, or the
+     *                                            key is blank
+     * @throws CurrencyMismatchException         if the amount is in another currency
+     * @throws InsufficientFundsException        if the movement would breach the overdraft
+     *                                            allowance
+     * @throws DuplicateIdempotencyKeyException  if the key was already used for a movement of a
+     *                                            different type or amount
+     */
+    public Transaction recordMovement(TransactionType type, Money amount, String reference, String idempotencyKey) {
+        return recordMovement(type, amount, reference, clock.instant(), idempotencyKey);
+    }
+
+    /**
+     * Records a money movement against this account, protected against being applied twice for
+     * the same {@code idempotencyKey} and stamped with the client's {@code occurredAt} event time.
+     *
+     * <p>Validation that needs no shared state is performed before the lock is taken, keeping
+     * the critical section as short as possible. The idempotency check itself must happen
+     * under the lock, immediately before the overdraft check: recording whether a key has been
+     * seen and applying the movement it describes must be one atomic step, otherwise two
+     * concurrent retries carrying the same key could both observe "not seen yet" and both
+     * apply &mdash; exactly the race this feature exists to close.</p>
+     *
+     * <p>{@code occurredAt} is recorded verbatim and otherwise ignored: the movement's position
+     * in the history, the running balance and the overdraft decision are all driven by the
+     * booking time and the account-scoped sequence, never by the client's clock. Its only
+     * constraint is that it must fall within the drift window documented on
+     * {@link Transaction}, which is checked when the transaction is constructed.</p>
+     *
+     * @param type           whether money moves in or out
+     * @param amount         the strictly positive amount to move, in the account currency
+     * @param reference      an optional free-text note, may be {@code null} or blank
+     * @param occurredAt     when the client says the movement happened; reference data only
+     * @param idempotencyKey a caller-supplied key identifying this movement; replaying the same
+     *                       key with the same {@code type} and {@code amount} is a safe retry
+     * @return the recorded transaction, or the original transaction if this key, type and
+     *         amount were seen before
+     * @throws IllegalArgumentException          if the amount is not strictly positive,
+     *                                            {@code occurredAt} lies outside the drift window,
+     *                                            or the {@code idempotencyKey} is blank
+     * @throws NullPointerException              if {@code occurredAt} is {@code null}
+     * @throws CurrencyMismatchException         if the amount is in another currency
+     * @throws InsufficientFundsException        if the movement would breach the overdraft
+     *                                            allowance
+     * @throws DuplicateIdempotencyKeyException  if the key was already used for a movement of a
+     *                                            different type or amount
+     */
+    public Transaction recordMovement(TransactionType type,
+                                      Money amount,
+                                      String reference,
+                                      Instant occurredAt,
+                                      String idempotencyKey) {
         Objects.requireNonNull(type, "type must not be null");
         Objects.requireNonNull(amount, "amount must not be null");
         Objects.requireNonNull(occurredAt, "occurredAt must not be null");
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException("idempotencyKey must not be blank");
+        }
 
         if (!amount.currency().equals(currency)) {
             throw new CurrencyMismatchException(currency, amount.currency());
@@ -184,6 +268,14 @@ public final class Account {
 
         lock.lock();
         try {
+            IdempotencyRecord existing = idempotencyRecords.get(idempotencyKey);
+            if (existing != null) {
+                if (existing.type() == type && existing.amount().equals(amount)) {
+                    return existing.transaction();
+                }
+                throw new DuplicateIdempotencyKeyException(id, idempotencyKey);
+            }
+
             BalanceSnapshot current = balanceSnapshot;
             Money resultingBalance = current.availableBalance().add(signedAmount);
 
@@ -191,6 +283,9 @@ public final class Account {
             // never refused. Expressed in terms of the resulting balance so that new movement
             // types need no special handling here.
             if (signedAmount.isNegative() && !overdraftPolicy.allows(resultingBalance)) {
+                // Deliberately not stored in idempotencyRecords: nothing was applied, so a
+                // retry of the same key after the caller tops up funds must be free to try
+                // again rather than being permanently refused by a key that only ever failed.
                 throw new InsufficientFundsException(
                         id, amount, current.availableBalance(), overdraftPolicy.limit());
             }
@@ -208,6 +303,7 @@ public final class Account {
 
             transactions.add(transaction);
             balanceSnapshot = current.fold(transaction);
+            idempotencyRecords.put(idempotencyKey, new IdempotencyRecord(type, amount, transaction));
             return transaction;
         } finally {
             lock.unlock();
@@ -358,5 +454,21 @@ public final class Account {
      * @param transactions    the full history at the moment of capture, oldest first
      */
     public record ConsistentView(BalanceSnapshot balanceSnapshot, List<Transaction> transactions) {
+    }
+
+    /**
+     * The fingerprint of a movement recorded under a given idempotency key, together with the
+     * transaction it produced.
+     *
+     * <p>{@code amount} is compared with {@link Money#equals(Object)}, which already accounts
+     * for currency &mdash; every {@code Money} in this domain is constructed through
+     * {@link Money#of}, which normalises scale to the currency's minor unit, so two equal-value
+     * amounts are guaranteed to compare equal here with no scale surprises.</p>
+     *
+     * @param type        the direction of the originally recorded movement
+     * @param amount      the amount of the originally recorded movement
+     * @param transaction the transaction that was produced
+     */
+    private record IdempotencyRecord(TransactionType type, Money amount, Transaction transaction) {
     }
 }

@@ -206,6 +206,18 @@ could never be one. An account taking two orders of magnitude more traffic would
 different story, and that is the point at which sharding the aggregate would be worth its
 complexity.
 
+**Re-measured after idempotency keys were added**, since that check runs inside the same
+critical section and on every write. Both simulations were re-run (230,265 and 192,000
+requests, 0 failures, p95 and p99 unchanged at 1 ms). The table above is *not* restated from
+that run: it was taken against a CPU-limited container (`--cpus=3 --memory=2g`) and the re-run
+was host-native against a bare JVM, so the tail figures are not comparable and substituting
+them would be quietly dishonest. What the re-run does establish is that the added work — a
+single `HashMap` lookup and insert under a lock that was already held — is not measurable at
+these rates, which is what one would expect and is now checked rather than assumed. The same
+run also confirmed the ledger's central invariant end to end: after 96,000 concurrent
+movements on one account, `availableBalance` equalled the sum of the full paged history exactly
+and all 96,000 transaction identifiers were distinct.
+
 ### Reproducing the cross-architecture comparison
 
 ```bash

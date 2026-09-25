@@ -12,6 +12,7 @@ import jakarta.inject.Inject;
 import jakarta.validation.Valid;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -39,6 +40,23 @@ import java.util.UUID;
 @RunOnVirtualThread
 public class TransactionResource {
 
+    /**
+     * Name of the mandatory header carrying the caller-supplied idempotency key.
+     *
+     * <p>A compile-time constant, which is what allows it to be used as the
+     * {@link HeaderParam} value, so the binding and the validation message below cannot drift
+     * apart.</p>
+     *
+     * <p><strong>This constant is not the source of truth for the header's name</strong> &mdash;
+     * {@code META-INF/openapi.yaml} is, and this is one expression of it. The test tiers are a
+     * second, deliberately independent expression: they spell the header out as a literal, and
+     * they are validated against the contract on the way out, so a request naming the header
+     * anything else is refused before it is even sent. Pointing either expression at the other
+     * would collapse a cross-check into a tautology &mdash; renaming this field would then
+     * rename the header the service accepts with nothing left to notice.</p>
+     */
+    public static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+
     private final LedgerService ledgerService;
     private final LedgerRequestMapper requestMapper;
     private final LedgerResponseMapper responseMapper;
@@ -62,24 +80,39 @@ public class TransactionResource {
     /**
      * Records a deposit or a withdrawal.
      *
+     * <p>The {@code Idempotency-Key} header is mandatory: it is the only reliable way to tell
+     * a network-level retry of this exact request apart from a second, coincidentally
+     * identical, movement. Replaying the same key with the same {@code type} and {@code amount}
+     * returns the original {@code 201} response again rather than recording the movement a
+     * second time; replaying it with a different type or amount is refused with
+     * {@code 409 Conflict}.</p>
+     *
      * <p>The caller's {@code occurredAt} is carried through to the stored movement as reference
      * data. It never affects where the movement lands in the history, what the balance becomes,
      * or whether an overdraft check passes &mdash; those follow the ledger's own clock and the
      * account-scoped sequence. See {@link com.teya.tinyledger.domain.Transaction}.</p>
      *
-     * @param accountId the account to move money on
-     * @param request   the movement to record
-     * @param uriInfo   used to build the {@code Location} header
+     * @param accountId      the account to move money on
+     * @param idempotencyKey a caller-supplied key identifying this movement, reused verbatim on
+     *                       retry
+     * @param request        the movement to record
+     * @param uriInfo        used to build the {@code Location} header
      * @return {@code 201 Created} with the recorded transaction
+     * @throws IllegalArgumentException if the header is missing or blank
      */
     @POST
     public Response recordTransaction(@PathParam("accountId") UUID accountId,
+                                      @HeaderParam(IDEMPOTENCY_KEY_HEADER) String idempotencyKey,
                                       @Valid RecordTransactionRequest request,
                                       @Context UriInfo uriInfo) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException("Header '" + IDEMPOTENCY_KEY_HEADER + "' is required");
+        }
+
         Money amount = requestMapper.toAmount(request);
 
         Transaction transaction = ledgerService.recordMovement(
-                accountId, request.type(), amount, request.reference(), request.occurredAt());
+                accountId, request.type(), amount, request.reference(), request.occurredAt(), idempotencyKey);
 
         return Response
                 .created(uriInfo.getAbsolutePath())

@@ -78,6 +78,7 @@ class LedgerEndToEndIT {
                 .extract().path("id");
 
         given().contentType(ContentType.JSON).accept(ContentType.JSON)
+                .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                 .body("""
                         {"type":"DEPOSIT","amount":"1000.00","currency":"EUR","reference":"Salary","occurredAt":"%s"}
                         """.formatted(Instant.now()))
@@ -86,6 +87,7 @@ class LedgerEndToEndIT {
                 .body("availableBalanceAfter", equalTo("1000.00"));
 
         given().contentType(ContentType.JSON).accept(ContentType.JSON)
+                .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                 .body("""
                         {"type":"WITHDRAWAL","amount":"1150.00","currency":"EUR","reference":"Car repair","occurredAt":"%s"}
                         """.formatted(Instant.now()))
@@ -125,6 +127,7 @@ class LedgerEndToEndIT {
                 .extract().path("id");
 
         given().contentType(ContentType.JSON).accept(ContentType.JSON)
+                .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                 .body("""
                         {"type":"WITHDRAWAL","amount":"10.01","currency":"EUR","occurredAt":"%s"}
                         """.formatted(Instant.now()))

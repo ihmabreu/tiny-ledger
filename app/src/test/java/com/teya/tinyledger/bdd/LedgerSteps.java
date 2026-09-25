@@ -32,6 +32,12 @@ public class LedgerSteps {
 
     private Response lastResponse;
     private Response lastHistoryResponse;
+    private String lastMoveOwner;
+    private String lastMoveType;
+    private String lastMoveAmount;
+    private String lastMoveCurrency;
+    private String lastMoveReference;
+    private String lastIdempotencyKey;
 
     /**
      * Clears the per-scenario state so scenarios cannot influence one another.
@@ -41,6 +47,12 @@ public class LedgerSteps {
         accountIdsByOwner.clear();
         lastResponse = null;
         lastHistoryResponse = null;
+        lastMoveOwner = null;
+        lastMoveType = null;
+        lastMoveAmount = null;
+        lastMoveCurrency = null;
+        lastMoveReference = null;
+        lastIdempotencyKey = null;
     }
 
     private static RequestSpecification api() {
@@ -132,6 +144,33 @@ public class LedgerSteps {
     @When("^I deposit (-?[\\d.]+) ([A-Z]{3}) into \"([^\"]*)\" with the reference \"([^\"]*)\"$")
     public void iDepositWithReference(String amount, String currency, String owner, String reference) {
         lastResponse = move(owner, "DEPOSIT", amount, currency, reference);
+    }
+
+    /**
+     * Pays money into an account, quoting an explicit idempotency key rather than a
+     * fresh one per call, so the scenario can deliberately retry it later.
+     *
+     * @param amount   the amount
+     * @param currency ISO 4217 code
+     * @param owner    the account holder
+     * @param key      the idempotency key to use
+     */
+    @When("^I deposit (-?[\\d.]+) ([A-Z]{3}) into \"([^\"]*)\" using idempotency key \"([^\"]*)\"$")
+    public void iDepositWithIdempotencyKey(String amount, String currency, String owner, String key) {
+        lastResponse = move(owner, "DEPOSIT", amount, currency, null, key);
+    }
+
+    /**
+     * Repeats the last movement request verbatim, including its idempotency key, exactly as a
+     * client retrying after a lost response would.
+     */
+    @When("^I retry that same request$")
+    public void iRetryThatSameRequest() {
+        assertThat(lastIdempotencyKey)
+                .as("no earlier request with an explicit idempotency key to retry")
+                .isNotNull();
+        lastResponse = move(lastMoveOwner, lastMoveType, lastMoveAmount, lastMoveCurrency,
+                lastMoveReference, lastIdempotencyKey);
     }
 
     /**
@@ -399,11 +438,28 @@ public class LedgerSteps {
     }
 
     private Response move(String owner, String type, String amount, String currency, String reference) {
-        return move(owner, type, amount, currency, reference, Instant.now());
+        return move(owner, type, amount, currency, reference, Instant.now(), java.util.UUID.randomUUID().toString());
     }
 
     private Response move(String owner, String type, String amount, String currency, String reference,
                           Instant occurredAt) {
+        return move(owner, type, amount, currency, reference, occurredAt, java.util.UUID.randomUUID().toString());
+    }
+
+    private Response move(String owner, String type, String amount, String currency, String reference,
+                          String idempotencyKey) {
+        return move(owner, type, amount, currency, reference, Instant.now(), idempotencyKey);
+    }
+
+    private Response move(String owner, String type, String amount, String currency, String reference,
+                          Instant occurredAt, String idempotencyKey) {
+        lastMoveOwner = owner;
+        lastMoveType = type;
+        lastMoveAmount = amount;
+        lastMoveCurrency = currency;
+        lastMoveReference = reference;
+        lastIdempotencyKey = idempotencyKey;
+
         String body = reference == null
                 ? """
                 {"type":"%s","amount":"%s","currency":"%s","occurredAt":"%s"}
@@ -412,6 +468,9 @@ public class LedgerSteps {
                 {"type":"%s","amount":"%s","currency":"%s","reference":"%s","occurredAt":"%s"}
                 """.formatted(type, amount, currency, reference, occurredAt);
 
-        return api().body(body).when().post("/api/v1/accounts/{id}/transactions", accountId(owner));
+        return api()
+                .header("Idempotency-Key", idempotencyKey)
+                .body(body)
+                .when().post("/api/v1/accounts/{id}/transactions", accountId(owner));
     }
 }

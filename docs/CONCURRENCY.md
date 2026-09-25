@@ -111,13 +111,19 @@ contending rather than politely queueing behind ramp-up.
 | 4 | `recordMovement_concurrentDeposits_assignsUniqueAndContiguousSequenceNumbers` | A racy sequence counter |
 | 5 | `recordMovement_concurrentMixedMovements_recordedBalanceMatchesHistoryReplay` — each movement's recorded `availableBalanceAfter` must match a replay of the history to that point | An incremental fold that drifts from a full recomputation |
 | 6 | `consistentView_concurrentWithMovements_servesConsistentSnapshotWithoutTornReads` — readers hammer the balance while writers record | Unsafe publication, or a torn read of a mutable snapshot |
+| 7 | `recordMovement_manyConcurrentCallsWithSameIdempotencyKey_recordsExactlyOneTransaction` — 256 threads race with the identical key and payload | Checking "have I seen this key?" outside the lock, letting two racing retries both apply |
+| 8 | `recordMovement_manyConcurrentCallsWithSameKeyDifferentAmounts_exactlyOneSucceedsRestConflict` — 256 threads race reusing one key for 256 distinct amounts; **exactly one** may succeed | The same race, surfaced as a duplicate movement instead of a `409` |
 
-Test 3 is the sharpest of the six. With a €100.00 allowance and a flood of €1.00 withdrawals,
-**exactly 100** must be accepted and every other one refused with 422. A check-then-act race
-shows up as 101 or 130 successes — a failure that is arithmetic, not statistical.
+Test 3 is the sharpest of tests 1&ndash;6, which predate idempotency. With a €100.00 allowance
+and a flood of €1.00 withdrawals, **exactly 100** must be accepted and every other one refused
+with 422. A check-then-act race shows up as 101 or 130 successes — a failure that is
+arithmetic, not statistical. Tests 7 and 8 apply the identical reasoning to the idempotency-key
+check: it is also a check-then-act sequence sharing the same lock, so it is held to the same
+"exactly N, not N±1" standard.
 
-The same properties are then re-asserted over real HTTP in `LedgerApiConcurrencyTest`, because
-a guarantee that only holds when you bypass the API layer is not a guarantee a client can use.
+The same properties are then re-asserted over real HTTP in `LedgerApiConcurrencyTest`
+(including `deposit_concurrentRequestsWithSameIdempotencyKey_recordsExactlyOnce`), because a
+guarantee that only holds when you bypass the API layer is not a guarantee a client can use.
 That tier also checks that movements on unrelated accounts do not interfere.
 
 ### On both memory models
