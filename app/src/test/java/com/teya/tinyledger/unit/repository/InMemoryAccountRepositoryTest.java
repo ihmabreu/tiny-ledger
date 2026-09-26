@@ -53,6 +53,16 @@ class InMemoryAccountRepositoryTest {
     }
 
     @Test
+    @DisplayName("updates an existing account without duplicating registration order")
+    void save_existingAccount_updatesAndKeepsSingleRegistration() {
+        Account account = repository.save(newAccount("Ada"));
+        Account updated = repository.save(account);
+
+        assertThat(updated).isSameAs(account);
+        assertThat(repository.findAll()).containsExactly(account);
+    }
+
+    @Test
     @DisplayName("finds a stored account by its identifier")
     void findById_storedAccountId_returnsOptionalContainingAccount() {
         Account account = repository.save(newAccount("Ada"));

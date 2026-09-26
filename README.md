@@ -312,6 +312,7 @@ after** the booking time is refused with `400`:
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 4b1f8e26-0c7a-4de9-9a3f-6b5c2d1e0a94' \
   -d '{"type": "DEPOSIT", "amount": "10.00", "currency": "EUR",
        "occurredAt": "2019-01-01T00:00:00Z"}'
 ```
@@ -375,16 +376,20 @@ can never collide on a port. RestAssured picks the assigned port up on its own.
 | Setting | Effect |
 |---|---|
 | `org.gradle.caching` | Task outputs are reused across builds, and across CI runs via `setup-gradle`. A `clean build` that changes nothing drops from ~16s to ~1s. |
-| `org.gradle.configuration-cache` | The configuration phase is skipped when its inputs are unchanged. |
+| `org.gradle.configuration-cache` | The configuration phase is skipped when its inputs are unchanged — and, less obviously, Gradle then runs independent tasks of the same project concurrently, which is what lets the five test tiers overlap. |
 
-`org.gradle.parallel` is deliberately left **off**. It was tried and measured at 16s either
-way — there are two subprojects and the critical path is the `:app` test tiers regardless —
-and it lets the Quarkus test tiers overlap on one `app/build` directory, which is how an
-intermittent `FileAlreadyExistsException` was found. The reasoning is recorded in the file
-itself so it does not get re-added on a hunch.
+`org.gradle.parallel` is deliberately left **off**. Check the full reasoning in
+[`docs/TESTING.md`](docs/TESTING.md#test-isolation) and
+[`gradle.properties`](gradle.properties) so it does not get re-litigated on a hunch.
 
-Coverage (JaCoCo) is written to `app/build/reports/jacoco/test/html/index.html` after
-`./gradlew :app:test`.
+CI is unaffected either way: each tier is its own matrix job running a single `:app` task,
+so there is nothing for cross-project parallelism to overlap.
+
+Coverage (JaCoCo) is written to `app/build/reports/jacoco/test/html/index.html`. The report
+merges the execution data of *every* tier that has run, not just the unit tests — CI collects
+the five tiers' `.exec` files, verifies minimum 85% instruction and branch coverage thresholds
+via `:app:jacocoTestCoverageVerification`, and publishes the combined report, along with the
+Javadoc, as downloadable build artifacts.
 
 Javadoc:
 

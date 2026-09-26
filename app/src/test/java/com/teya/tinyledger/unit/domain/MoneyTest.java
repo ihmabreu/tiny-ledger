@@ -134,7 +134,10 @@ class MoneyTest {
         void isPositiveAndIsNegativeAndIsZero_variousAmounts_classifiesCorrectly() {
             assertThat(Money.of("0.01", EUR).isPositive()).isTrue();
             assertThat(Money.of("0.01", EUR).isNegative()).isFalse();
+            assertThat(Money.of("0.01", EUR).isZero()).isFalse();
             assertThat(Money.of("-0.01", EUR).isNegative()).isTrue();
+            assertThat(Money.of("-0.01", EUR).isPositive()).isFalse();
+            assertThat(Money.of("-0.01", EUR).isZero()).isFalse();
             assertThat(Money.zero(EUR).isZero()).isTrue();
             assertThat(Money.zero(EUR).isPositive()).isFalse();
             assertThat(Money.zero(EUR).isNegative()).isFalse();

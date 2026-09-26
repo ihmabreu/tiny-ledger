@@ -33,6 +33,13 @@ The image name comes from `application.yml`
 (`quarkus.container-image.group` / `.name` / `.tag`) and produces `teya/tiny-ledger:1.0.0`, a
 ~413 MB JVM image on `registry.access.redhat.com/ubi9/openjdk-21-runtime`.
 
+> **The image is a side effect Gradle does not track.** Jib runs inside the Quarkus build
+> (`quarkusAppPartsBuild`), and loading the image into Docker, or pushing it to a registry, is
+> not a task output. If that task comes back `FROM-CACHE` (warm build cache) or `UP-TO-DATE`,
+> Jib does not run and no image is produced, yet the build still reports `BUILD SUCCESSFUL`.
+> CI therefore builds images with `--no-build-cache` on a fresh runner. Locally, if you have
+> removed the image, add `--no-build-cache` and run `clean` first (or use `--rerun-tasks`).
+
 **Jib defaults to `linux/amd64` regardless of the host.** That is convenient on CI and
 surprising on an Apple Silicon laptop, where the resulting image runs under emulation. To build
 for the host architecture instead:

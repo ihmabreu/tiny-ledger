@@ -32,7 +32,13 @@ overdraft limit versus one cent past it, a `fold()` applied twice, pagination at
 size`, `limit` above the maximum.
 
 `./gradlew :app:test` also produces the JaCoCo report at
-`app/build/reports/jacoco/test/html/index.html`.
+`app/build/reports/jacoco/test/html/index.html`. The report is an aggregate: it merges the
+execution data written by every tier that has run (`build/jacoco/<task>.exec`), so a line
+reached only by the BDD or integration suite counts as covered. Running `:app:jacocoTestReport`
+on its own re-renders the report from whatever execution data is already present, without
+re-running any tests — which is exactly how CI turns its five parallel tier jobs into one
+report. Minimum coverage (85% instruction and branch coverage across the bundle) is enforced
+via `:app:jacocoTestCoverageVerification`.
 
 ## Integration — `tag: integration`
 
@@ -313,11 +319,16 @@ locally, and two tiers can never collide. RestAssured reads the assigned port fr
 nothing in the tests has to know the number.
 
 **Shared build outputs.** Every Quarkus boot used to write `app/build/openapi/openapi.yaml`
-(`quarkus.smallrye-openapi.store-schema-directory`). With Gradle parallel execution enabled,
-two tiers boot at once, both write that path, and the build fails intermittently with
+(`quarkus.smallrye-openapi.store-schema-directory`). The tiers run concurrently — the
+configuration cache schedules independent tasks of the same project in parallel, so two
+tiers boot at once, both write that path, and the build fails intermittently with
 `FileAlreadyExistsException`. Nothing reads that file — and with `mp.openapi.scan.disable=true`
 it is only ever a copy of the hand-written contract — so it is now switched off under the test
-profile. Parallel execution is also left off; the reasoning is in
+profile.
+
+Note what the fix is *not*: `org.gradle.parallel` is off, and turning it off is not what
+makes this safe. That flag only parallelises across projects and is ignored under the
+configuration cache; the overlap is there regardless. The reasoning, with measurements, is in
 [`gradle.properties`](../gradle.properties).
 
 The general lesson is worth keeping: test tiers that share a working directory are not isolated
