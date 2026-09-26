@@ -14,6 +14,8 @@ contract, served on **virtual threads**, and verified by six distinct test tiers
 - How the API evolves: [`docs/API_VERSIONING.md`](docs/API_VERSIONING.md)
 - How the image is built and run, on both architectures:
   [`docs/CONTAINERISATION.md`](docs/CONTAINERISATION.md)
+- Where the model would go next, and what is deliberately refused:
+  [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md)
 
 ---
 
@@ -456,7 +458,7 @@ app/                     the service
     META-INF/openapi.yaml   the contract — the source of truth, served verbatim
   src/test/java/...      unit, integration, bdd, e2e, concurrency tiers
 load-tests/              Gatling simulations (separate module, separate dependency set)
-docs/                    architecture, assumptions, concurrency, testing, versioning
+docs/                    architecture, assumptions, concurrency, testing, versioning, next steps
 .github/workflows/ci.yml every tier, plus amd64 + arm64 image build and smoke test
 ```
 
@@ -467,3 +469,7 @@ The assessment brief excludes them, and adding them would obscure the part that 
 those seams would go — and what would change if they were added — is covered in
 [`docs/ASSUMPTIONS.md`](docs/ASSUMPTIONS.md) and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+The *domain model* has its own set of deliberate omissions — reversals, categories, account
+lifecycle, holds. Which of those are worth adding, which would quietly break the balance
+invariant, and in what order, is argued in [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md).
