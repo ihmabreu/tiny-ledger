@@ -225,9 +225,8 @@ and all 96,000 transaction identifiers were distinct.
 # Docker daemon cannot hold a manifest list.
 docker run -d --rm --name tl-registry -p 5001:5000 registry:2
 
-./gradlew :app:build -x test -x bddTest -x integrationTest -x concurrencyTest -x e2eTest \
+./gradlew :app:imagePush \
   -Dquarkus.profile=multiarch \
-  -Dquarkus.container-image.push=true \
   -Dquarkus.container-image.registry=localhost:5001 \
   -Dquarkus.container-image.insecure=true
 

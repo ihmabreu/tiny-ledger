@@ -24,7 +24,7 @@ class re-pushes a few kilobytes rather than the whole application layer.
 Needs a running Docker daemon (Docker Desktop, Colima, Rancher Desktop — any of them).
 
 ```bash
-./gradlew :app:build -Dquarkus.container-image.build=true
+./gradlew :app:imageBuild
 docker run --rm -p 8080:8080 teya/tiny-ledger:1.0.0
 curl -s http://localhost:8080/api/v1/accounts
 ```
@@ -33,13 +33,19 @@ The image name comes from `application.yml`
 (`quarkus.container-image.group` / `.name` / `.tag`) and produces `teya/tiny-ledger:1.0.0`, a
 ~413 MB JVM image on `registry.access.redhat.com/ubi9/openjdk-21-runtime`.
 
+> **Use `imageBuild`, not `build -Dquarkus.container-image.build=true`.** The two are not
+> interchangeable once Gradle's build cache is warm. `quarkus.container-image.build` is a
+> *system property*, not a task input, so `:app:build` stays `UP-TO-DATE` from an earlier
+> build, Jib never runs, and the command reports `BUILD SUCCESSFUL` while producing no image
+> at all. The dedicated `imageBuild` task declares the image as its output, so it re-runs when
+> it has to.
+
 **Jib defaults to `linux/amd64` regardless of the host.** That is convenient on CI and
 surprising on an Apple Silicon laptop, where the resulting image runs under emulation. To build
 for the host architecture instead:
 
 ```bash
-./gradlew :app:build -Dquarkus.container-image.build=true \
-  -Dquarkus.jib.platforms=linux/arm64
+./gradlew :app:imageBuild -Dquarkus.jib.platforms=linux/arm64
 ```
 
 Both were verified on an arm64 host: the `linux/arm64` image reports `aarch64` inside the
@@ -57,9 +63,8 @@ daemon cannot hold a multi-architecture manifest list. Multi-arch is therefore p
 pushing to a registry, where manifest lists are supported:
 
 ```bash
-./gradlew :app:build \
+./gradlew :app:imagePush \
   -Dquarkus.profile=multiarch \
-  -Dquarkus.container-image.push=true \
   -Dquarkus.container-image.registry=<your-registry> \
   -Dquarkus.container-image.username=<user> \
   -Dquarkus.container-image.password=<token>
@@ -85,9 +90,8 @@ it is broken. A throwaway registry closes that gap, and this is exactly what the
 ```bash
 docker run -d --rm --name tl-registry -p 5001:5000 registry:2
 
-./gradlew :app:build -x test -x bddTest -x integrationTest -x concurrencyTest -x e2eTest \
+./gradlew :app:imagePush \
   -Dquarkus.profile=multiarch \
-  -Dquarkus.container-image.push=true \
   -Dquarkus.container-image.registry=localhost:5001 \
   -Dquarkus.container-image.insecure=true
 ```

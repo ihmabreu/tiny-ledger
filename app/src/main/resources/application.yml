@@ -78,8 +78,7 @@ ledger:
 # produces an image for the host architecture only. Multi-arch is built when
 # pushing to a registry, under the `multiarch` profile:
 #
-#   ./gradlew :app:build -Dquarkus.profile=multiarch \
-#       -Dquarkus.container-image.push=true \
+#   ./gradlew :app:imagePush -Dquarkus.profile=multiarch \
 #       -Dquarkus.container-image.registry=<registry>
 #
 # See docs/CONTAINERISATION.md.

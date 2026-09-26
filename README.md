@@ -312,6 +312,7 @@ after** the booking time is refused with `400`:
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 4b1f8e26-0c7a-4de9-9a3f-6b5c2d1e0a94' \
   -d '{"type": "DEPOSIT", "amount": "10.00", "currency": "EUR",
        "occurredAt": "2019-01-01T00:00:00Z"}'
 ```
@@ -417,7 +418,7 @@ Point them elsewhere with `-Dtinyledger.baseUrl=http://host:port`. Reports land 
 ## Running as a container
 
 ```bash
-./gradlew :app:build -Dquarkus.container-image.build=true
+./gradlew :app:imageBuild
 docker run --rm -p 8080:8080 teya/tiny-ledger:1.0.0
 ```
 

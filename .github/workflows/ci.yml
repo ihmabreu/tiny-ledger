@@ -29,23 +29,23 @@ jobs:
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       - name: Run the ${{ matrix.tier.name }} tier
         run: ./gradlew ${{ matrix.tier.task }} --stacktrace
 
       - name: Publish the test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-report-${{ matrix.tier.name }}
           path: app/build/reports/tests/
@@ -57,23 +57,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       - name: Generate the JaCoCo report
         run: ./gradlew :app:test :app:jacocoTestReport
 
       - name: Publish the coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: jacoco-report
           path: app/build/reports/jacoco/
@@ -85,16 +85,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       # Documentation that does not build is documentation nobody reads, so the
       # Javadoc is compiled on every change rather than on release only.
@@ -106,16 +106,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       # The simulations are compiled but not executed: latency numbers taken on a
       # shared CI runner would be noise, and failing a pull request on that noise
@@ -141,31 +141,27 @@ jobs:
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       # Jib needs no emulation to *build* for another architecture - it assembles
       # layers rather than executing them. QEMU is registered so the runner can
       # *run* the foreign image in the smoke test below.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: ${{ matrix.platform }}
 
       - name: Build the ${{ matrix.platform }} image
-        run: |
-          ./gradlew :app:build \
-            -x test -x bddTest -x integrationTest -x concurrencyTest -x e2eTest \
-            -Dquarkus.container-image.build=true \
-            -Dquarkus.jib.platforms=${{ matrix.platform }}
+        run: ./gradlew :app:imageBuild -Dquarkus.jib.platforms=${{ matrix.platform }}
 
       - name: Verify the image reports the expected architecture
         run: |
@@ -204,9 +200,14 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"ownerName":"CI","currency":"EUR"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
 
+          # `Idempotency-Key` and `occurredAt` are both mandatory on a movement, so the
+          # smoke test sends them the way a real client would rather than the bare
+          # minimum. The key is generated per run; /proc is used instead of uuidgen
+          # because it needs no package to be installed on the runner.
           curl -fsS -X POST "http://localhost:8080/api/v1/accounts/$account/transactions" \
             -H 'Content-Type: application/json' \
-            -d '{"type":"DEPOSIT","amount":"100.00","currency":"EUR"}' >/dev/null
+            -H "Idempotency-Key: $(cat /proc/sys/kernel/random/uuid)" \
+            -d "{\"type\":\"DEPOSIT\",\"amount\":\"100.00\",\"currency\":\"EUR\",\"occurredAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" >/dev/null
 
           balance=$(curl -fsS "http://localhost:8080/api/v1/accounts/$account/balance" \
             | python3 -c 'import sys,json; print(json.load(sys.stdin)["availableBalance"])')
@@ -234,23 +235,21 @@ jobs:
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       - name: Push a combined amd64 + arm64 image
         run: |
-          ./gradlew :app:build \
-            -x test -x bddTest -x integrationTest -x concurrencyTest -x e2eTest \
+          ./gradlew :app:imagePush \
             -Dquarkus.profile=multiarch \
-            -Dquarkus.container-image.push=true \
             -Dquarkus.container-image.registry=localhost:5000 \
             -Dquarkus.container-image.insecure=true
 
