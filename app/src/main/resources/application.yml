@@ -8,6 +8,13 @@ quarkus:
   http:
     port: 8080
 
+    # --- Response compression --------------------------------------------------
+    # Negotiated, never imposed: Vert.x compresses only when the client advertises
+    # support via `Accept-Encoding`, and names the algorithm it used in the response's
+    # `Content-Encoding`. A client that says nothing still gets plain bytes, so this is
+    # transparent to existing callers and not a breaking change.
+    enable-compression: true
+
   # --- API-first -------------------------------------------------------------
   # The contract in META-INF/openapi.yaml is hand-written and is the single source
   # of truth. Annotation scanning is disabled so the generated document can never

@@ -232,6 +232,35 @@ Reusing a key for a *different* `type` or `amount` is refused with `409 Conflict
 client bug rather than a safe retry. See [ASSUMPTIONS.md](docs/ASSUMPTIONS.md) for the full
 design, including why a movement refused for insufficient funds does not consume its key.
 
+### HTTP compression
+
+Responses are compressed when — and only when — the client asks for it. Advertise
+`Accept-Encoding: gzip` (or `deflate`) and the body comes back compressed, with the algorithm named
+in `Content-Encoding`; advertise nothing, or `identity`, and it comes back plain. `curl` does the
+negotiation for you with `--compressed`:
+
+```bash
+curl -s --compressed http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions?limit=50
+```
+
+It is worth asking for on the history endpoint in particular. A page of movements is the same field
+names repeated once per row, so a 50-movement page drops from **14,735 bytes to 2,088** — an 86%
+saving. Compression never changes the payload, only its encoding, so nothing else about the calls
+above differs.
+
+To see the difference on the wire, ask for the encoding without decoding it:
+
+```bash
+curl -s -o /dev/null -w 'plain: %{size_download}\n' \
+  "http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions?limit=50"
+
+curl -s -o /dev/null -w 'gzip:  %{size_download}\n' -H 'Accept-Encoding: gzip' \
+  "http://localhost:8080/api/v1/accounts/$ACCOUNT/transactions?limit=50"
+```
+
+The `/q/openapi` and `/q/swagger-ui` endpoints are served uncompressed regardless; see
+[ARCHITECTURE.md](docs/ARCHITECTURE.md#http-compression) for why that is left alone.
+
 ### What the status codes mean
 
 | Status | Meaning                                                                       |

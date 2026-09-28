@@ -150,6 +150,37 @@ blocked in a `synchronized` block **pins** its carrier platform thread; blocking
 `ReentrantLock` unmounts it and frees the carrier for other work. Under a hot-account load test
 that difference is the difference between graceful queueing and carrier-thread starvation.
 
+### HTTP compression
+
+The HTTP server compresses responses, but only ever by negotiation: Vert.x compresses when the
+client advertises `Accept-Encoding: gzip` (or `deflate`) and names the algorithm it chose in
+`Content-Encoding`. A client that advertises nothing, advertises `identity`, or advertises only an
+algorithm the server cannot produce still receives plain bytes. That is what makes this safe to
+turn on against an existing API: it is a transport negotiation, not a change to the contract, and
+the integration tier asserts exactly that by fetching the same resource both ways and comparing the
+decompressed body against the plain one byte for byte.
+
+It is worth having here because the responses are the ideal shape for it. A transaction page is the
+same handful of field names repeated once per movement, which is precisely what DEFLATE collapses:
+a 50-movement page measures **14,735 bytes plain and 2,088 compressed**, an 86% saving on the
+largest response the API serves.
+
+`compress-media-types` is deliberately left at the Quarkus default, which already covers
+`application/json` and therefore every response this service returns. Restating the default in
+`application.yml` would only create a second place to forget to update it.
+
+Two measured limits, both framework behaviour rather than configuration, and both deliberately left
+alone:
+
+- The non-application routes under `/q` — `/q/openapi` and `/q/swagger-ui` — do not run through the
+  compression handler, so the contract document is served uncompressed however the client asks.
+  These are developer-facing endpoints, not a hot path.
+- Bodies produced by the `ExceptionMapper`s are not compressed either. They measure between 145 and
+  250 bytes, where a gzip header plus DEFLATE overhead saves close to nothing.
+
+Neither is asserted in a test. Pinning framework behaviour that we do not control and do not depend
+on would buy nothing and would fail spuriously on the next Quarkus upgrade.
+
 ---
 
 ## SOLID, concretely

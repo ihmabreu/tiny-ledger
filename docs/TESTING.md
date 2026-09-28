@@ -7,9 +7,9 @@ scenario belongs to exactly one of them.
 | Tier | Command | Runs | Its job | Deliberately not its job |
 |---|---|---|---|---|
 | Unit | `:app:test` | 103 tests | Domain and service logic in isolation, especially edge cases | HTTP, JSON, wiring |
-| Integration | `:app:integrationTest` | 30 tests | HTTP semantics and conformance to the OpenAPI contract | Business edge cases |
+| Integration | `:app:integrationTest` | 52 tests | HTTP semantics and conformance to the OpenAPI contract | Business edge cases |
 | BDD | `:app:bddTest` | 14 scenarios | Acceptance criteria in the language of the brief | Technical edge cases |
-| E2E | `:app:e2eTest` | 5 tests | The packaged artefact actually boots and serves | Exhaustive coverage |
+| E2E | `:app:e2eTest` | 6 tests | The packaged artefact actually boots and serves | Exhaustive coverage |
 | Concurrency | `:app:concurrencyTest` | 10 tests | Correctness under contention | Throughput |
 | Load | `:load-tests:gatlingRun` | 2 simulations | Throughput and latency | Correctness |
 
@@ -56,6 +56,21 @@ The validator is strict in both directions, which means it also rejects delibera
 *requests* before they reach the server. `AbstractContractTest` therefore exposes two clients:
 `api()` (validated) for normal tests, and `rawApi()` (unvalidated) for the handful that need to
 assert how the server responds to contract-violating input such as `limit=abc`.
+
+`HttpCompressionTest` covers negotiated response compression. The temptation with compression is to
+assert that a `Content-Encoding: gzip` header came back and call it done — but that header on a body
+that was never compressed, or that decodes to something other than the plain representation, would
+pass such a test while breaking every client. So the tier asserts the actual promise instead: that
+compression is *negotiated* (never applied to a client that did not advertise it, including one
+offering only `identity` or only an algorithm the server cannot produce), that it is *real* (the
+body carries the format's magic number, decodes, and is smaller than the plain form), and that it is
+*transparent* (the decoded body is byte-identical to the same request fetched uncompressed).
+
+Those tests have to opt out of RestAssured's defaults to see anything at all: RestAssured advertises
+`Accept-Encoding: gzip,deflate` on its own and silently decodes the reply, which would make the two
+cases indistinguishable. `noContentDecoders()` suppresses both. The flip side is that every *other*
+test in this tier is already exercising the compressed path without saying so, which is a useful
+second opinion on transparency.
 
 `ApiDocumentTest` asserts that `/q/openapi` serves the committed file byte-for-byte — annotation
 scanning is disabled, and this test is what keeps it that way.

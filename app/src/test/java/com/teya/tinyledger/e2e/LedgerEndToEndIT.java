@@ -151,4 +151,29 @@ class LedgerEndToEndIT {
                 .statusCode(404)
                 .body("code", equalTo("ACCOUNT_NOT_FOUND"));
     }
+
+    /**
+     * Proves response compression survived packaging.
+     *
+     * <p>{@code quarkus.http.enable-compression} is a build-time property, so it is baked into the
+     * artefact rather than read at boot. An in-process {@code @QuarkusTest} can therefore confirm
+     * the behaviour but not that it made it into the jar, which is exactly the gap this tier
+     * exists to close.</p>
+     *
+     * <p>That RestAssured still reads the body as JSON is the other half of the point: the
+     * response is compressed on the wire and identical once decoded.</p>
+     */
+    @Test
+    @Order(6)
+    @DisplayName("compresses responses for clients that ask, once packaged")
+    void listAccounts_advertisingGzip_servesCompressedResponseFromThePackagedArtefact() {
+        given().accept(ContentType.JSON)
+                .header("Accept-Encoding", "gzip")
+                .when().get("/api/v1/accounts")
+                .then()
+                .statusCode(200)
+                .header("Content-Encoding", equalTo("gzip"))
+                .body("size()", greaterThanOrEqualTo(3))
+                .body("ownerName", hasItem("Ada Lovelace"));
+    }
 }
